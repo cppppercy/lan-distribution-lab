@@ -31,7 +31,8 @@
 测试命令和结果：PASS — .\.venv\Scripts\python.exe -m pytest（Python 3.13.7；2 passed, 1 warning in 0.39s）。
 真实设备证据：NOT_RUN；未测试手机、平板、真实 Wi-Fi、热点、文件传输、Range 或 CLI 续传。
 已知失败/未运行项：pytest 的 1 条警告来自 Starlette TestClient 使用 AnyIO 已弃用类型别名；文件/授权测试仅为设计，尚无实现可运行。
-当前分支、工作区状态、PR：以 T002 提交、推送和 PR 的 Git 记录为准。
+GitHub Actions：PASS — [PR #2](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42463779994/job/128678507058) 在 Windows / Python 3.12 成功执行现有 pytest（30 秒）。
+当前分支、工作区状态、PR：`docs/T002-api-security-design`；PR #2，后续提交与状态以 Git 记录为准。
 下一任务：T003，前提是审查并接受本任务的 API 与安全设计。
 ```
 
