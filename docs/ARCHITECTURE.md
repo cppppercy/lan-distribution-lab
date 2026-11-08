@@ -39,4 +39,4 @@ flowchart LR
 
 ## 启动与依赖
 
-项目使用 `pyproject.toml`：直接运行/开发依赖均精确固定；`requirements.lock` 约束已解析的传递依赖。Python 支持范围为 3.12 至 3.13。Windows PowerShell 的实际命令见 [README](../README.md)。CI 使用 Python 3.12，在不需要密钥、外部业务服务或数据库的条件下运行同一 pytest 命令。T001 本机以 Python 3.13 实测 `pytest` 为 2 通过（含 1 条上游依赖弃用警告），并以实际本机 socket 请求验证了健康响应。
+项目使用 `pyproject.toml`：直接运行/开发依赖均精确固定；`requirements.lock` 约束已解析的传递依赖。Python 支持范围为 3.12 至 3.13。Windows PowerShell 的实际命令见 [README](../README.md)。CI 使用 Python 3.12，在不需要密钥、外部业务服务或数据库的条件下运行同一 pytest 命令。T001 本机以 Python 3.13 实测 `pytest` 为 2 通过（含 1 条上游依赖弃用警告），并以实际本机 socket 请求验证了健康响应；PR #1 的 GitHub Actions 已在 Python 3.12 上通过。

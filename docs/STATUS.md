@@ -11,12 +11,12 @@
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health` 与 pytest：**IMPLEMENTED**。
 - 文件传输、设备发现、续传、多客户端分发：**NOT_IMPLEMENTED**。
-- GitHub Actions 工作流：**IMPLEMENTED，远端执行状态为 NOT_RUN（本次记录更新时尚未推送/创建 PR）**。
+- GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
 
 ## 当前任务
 - **T001 — DONE**：最小工程初始化、健康接口、自动化测试、CI 配置和启动说明已按任务边界完成。完整证据见下方记录与 `docs/TASKS.md`。
-- 下一关卡：G0 的本地工程基线已满足；GitHub CI 结论等待分支推送后的远端记录，不将其预先标为通过。
+- 下一关卡：G0 的本地工程基线及 GitHub CI 已满足；真实设备与真实 LAN 证据仍是后续任务范围。
 
 ## T001 验证记录（2026-11-08）
 
@@ -30,8 +30,9 @@
   PASS — .\.venv\Scripts\python.exe -m pytest（Python 3.13.7；2 passed, 1 warning in 0.42s）
   PASS — 短暂运行 python -m lan_distribution_lab 后，Invoke-RestMethod http://127.0.0.1:8000/api/health 返回 status=ok、service=lan-distribution-lab；测试后已停止进程。
 真实设备证据：NOT_RUN；未测试手机、平板、真实 Wi-Fi 或热点。
-已知失败/未运行项：pytest 的 1 条警告来自 Starlette TestClient 使用 AnyIO 已弃用类型别名；不影响本次 2 项断言。GitHub Actions 远端状态在推送前为 NOT_RUN。
-当前分支、工作区状态、PR：见本任务提交与推送后的 Git 记录；不在此处预填远端结果。
+已知失败/未运行项：pytest 的 1 条警告来自 Starlette TestClient 使用 AnyIO 已弃用类型别名；不影响本次 2 项断言。真实设备、真实 LAN 和性能实验仍为 NOT_RUN。
+GitHub Actions：PASS — [分支推送](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42461658261/job/128672044358)（25 秒）和 [PR #1](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42461686926/job/128672133644)（27 秒）均以 Python 3.12 运行 pytest 成功。
+当前分支、工作区状态、PR：`feat/T001-bootstrap`；PR #1，后续提交与状态以 Git 记录为准。
 下一任务：T002（文件 API 设计与威胁模型），前提为 T001 分支审查完成。
 ```
 
