@@ -2,7 +2,7 @@
 
 面向局域网的可靠文件传输与多终端协同分发系统（课程项目）。
 
-> 项目状态：规划与工程初始化阶段（2026-11-08）。尚未实现文件传输、续传、设备发现或调度功能；不得将规划描述为已交付。
+> 项目状态：T001 最小工程基线已在本机验证。当前只实现本机健康接口；尚未实现文件传输、续传、设备发现、调度或页面 UI；不得将规划描述为已交付。
 
 ## 项目目标
 
@@ -26,3 +26,50 @@
 本项目首先用于可信局域网的实验与课程学习。不得默认开放公网；不得把本机模拟并发测试宣称为多台无线设备实测。原生断点续传首先由 Python 客户端保证，移动浏览器的能力需按实际平台验证。
 
 代码、密钥、真实成果以当前仓库与测试记录为准。本文不声称任何尚未执行的测试通过。
+
+## 当前可运行基线（T001）
+
+### 前置条件
+
+- Windows PowerShell 5.1+。
+- Python 3.12 或 3.13。可用 `py -0p` 查看已安装解释器；T001 的本地验证使用 Python 3.13，CI 固定使用 Python 3.12。
+
+### 安装
+
+在仓库根目录执行：
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -c requirements.lock -e ".[dev]"
+```
+
+如果系统未安装 Python 3.12，可将第一条中的 `-3.12` 替换为已安装的 Python 3.13。直接依赖在 `pyproject.toml` 精确固定，传递依赖由 `requirements.lock` 约束；不要把 `.venv`、`.env` 或密钥提交到仓库。
+
+### 启动本机服务
+
+```powershell
+python -m lan_distribution_lab
+```
+
+该入口固定监听 `http://127.0.0.1:8000`，不会默认开放局域网或修改 Windows 防火墙。保持该终端运行后，在另一 PowerShell 窗口验证：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+```
+
+预期输出：
+
+```text
+status service
+------ -------
+ok     lan-distribution-lab
+```
+
+### 运行自动化测试
+
+```powershell
+python -m pytest
+```
+
+测试通过仅说明本地 HTTP 健康接口符合当前契约；它不等同于手机、平板、真实 Wi-Fi 或文件传输验证。详见 [当前架构](docs/ARCHITECTURE.md) 与 [实验记录](docs/EXPERIMENTS.md)。

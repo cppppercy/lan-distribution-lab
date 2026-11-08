@@ -8,7 +8,7 @@
 
 | ID | 状态 | 目标 | 关卡 | 依赖 |
 | --- | --- | --- | --- | --- |
-| T001 | TODO | 初始化工程和最小 HTTP 健康接口、自动化测试、CI、启动说明 | G0 | 规范已发布 |
+| T001 | DONE | 初始化工程和最小 HTTP 健康接口、自动化测试、CI、启动说明 | G0 | 规范已发布 |
 | T002 | TODO | 文件 API 设计与威胁模型；接口契约、权限与路径安全测试设计 | G1 | T001 |
 | T003 | TODO | 后端受控共享文件、列表、下载、上传与校验 | G1 | T002 |
 | T004 | TODO | Vue 移动端基础界面及 PC↔移动设备真实互通 | G1 | T003 |
@@ -44,6 +44,8 @@
 5. 改动在专门分支、可审查；按用户在任务 prompt 中的授权推送分支并创建 PR，不自动合并。
 
 **允许改动范围**：必要的项目配置、后端最小目录、测试、`.github/workflows`、`README.md`、`docs/ARCHITECTURE.md`、`docs/EXPERIMENTS.md`、`docs/STATUS.md`、`docs/TASKS.md`；本任务不应重写 `docs/REQUIREMENTS.md`、`AGENTS.md` 的约束。
+
+**交接记录（2026-11-08）**：已在 `feat/T001-bootstrap` 实现 `GET /api/health`、本地入口、pytest、依赖锁约束和 Windows CI 工作流。Python 3.13 本机执行 `python -m pytest`：`2 passed, 1 warning`；短暂启动仅绑定 `127.0.0.1:8000` 的服务后，实际请求返回 `status=ok`、`service=lan-distribution-lab`。本次未做真实手机/平板、LAN、传输或性能实验；远端 CI 在推送/PR 前为 `NOT_RUN`，以 GitHub 实际记录为准。
 
 ### T002 及后续任务共同模板
 

@@ -1,0 +1,22 @@
+# Python bytecode and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+.test-temp/
+
+# Test and type-checking artefacts
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build artefacts
+build/
+dist/
+*.egg-info/
+
+# Local-only configuration and editor settings
+.env
+.env.*
+.vscode/
+.idea/
