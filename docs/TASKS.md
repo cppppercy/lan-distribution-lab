@@ -9,7 +9,7 @@
 | ID | 状态 | 目标 | 关卡 | 依赖 |
 | --- | --- | --- | --- | --- |
 | T001 | DONE | 初始化工程和最小 HTTP 健康接口、自动化测试、CI、启动说明 | G0 | 规范已发布 |
-| T002 | TODO | 文件 API 设计与威胁模型；接口契约、权限与路径安全测试设计 | G1 | T001 |
+| T002 | DONE | 文件 API 设计与威胁模型；接口契约、权限与路径安全测试设计 | G1 设计前置 | T001 |
 | T003 | TODO | 后端受控共享文件、列表、下载、上传与校验 | G1 | T002 |
 | T004 | TODO | Vue 移动端基础界面及 PC↔移动设备真实互通 | G1 | T003 |
 | T005 | TODO | HTTP Range/版本保护/边界测试 | G2 | T003 |
@@ -47,7 +47,19 @@
 
 **交接记录（2026-11-08）**：已在 `feat/T001-bootstrap` 实现 `GET /api/health`、本地入口、pytest、依赖锁约束和 Windows CI 工作流。Python 3.13 本机执行 `python -m pytest`：`2 passed, 1 warning`；短暂启动仅绑定 `127.0.0.1:8000` 的服务后，实际请求返回 `status=ok`、`service=lan-distribution-lab`。GitHub Actions 的分支推送和 PR #1 均在 Python 3.12 通过（见 `docs/STATUS.md`）；本次未做真实手机/平板、LAN、传输或性能实验。
 
-### T002 及后续任务共同模板
+### T002（文件 API 契约、安全威胁模型与测试方案设计）
+
+**目标**：为 T003 受控文件收发提供可审查的 HTTP 契约、局域网安全边界、存储模型和分阶段测试方案；不实现文件业务。
+
+**完成内容**：新增 `docs/API_CONTRACT.md`、`docs/THREAT_MODEL.md`、`docs/TEST_PLAN.md`；将架构、ADR、状态同步到“短时配对码 + 限时会话”“服务端 UUID + 不可变内容快照”设计。具体端点、错误格式、大小/配额、ETag/If-Range 关系及 T003--T006 测试路径均已定义。
+
+**非目标**：未实现上传、下载、认证、SQLite、Range、CLI、Vue、UDP、调度、真实设备或性能实验；这些均不得标记完成。
+
+**验收证据（2026-11-08）**：本地 Markdown 链接、必需 API 路径和未来功能状态检查通过；`python -m pytest` 在 Python 3.13.7 下为 `2 passed, 1 warning in 0.39s`。PR #2 的 GitHub Actions 亦在 Windows / Python 3.12 通过（30 秒）。警告来自上游 Starlette/AnyIO 弃用类型别名。没有文件传输或真实 LAN 测试结果。
+
+**对 T003 的建议范围**：按契约实现配对/会话、`managed_root`、私有 staging、完整流式上传下载、SHA-256、任务摘要和对应 P0 自动化测试；Range/If-Range、CLI 续传及移动端真实互通分别留给 T005/T006/T004。
+
+### T003 及后续任务共同模板
 
 每次将任务细化后再发给执行 Agent，格式必须包括：
 
