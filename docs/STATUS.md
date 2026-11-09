@@ -34,6 +34,18 @@
 已知限制：不支持 Range、If-Range、上传幂等键或续传；HTTP 无 TLS；Windows 受限测试环境无法创建符号链接，reparse-point 竞态未验证。
 ```
 
+## T003 最终验收补修记录（2026-11-09）
+
+```text
+时间：2026-11-09
+任务：PR #3 的 T003 最终验收补修
+实际代码变化：上传路由将 ClientDisconnect、取消、解析/API/存储异常统一收敛到 finally 清理；staging 文件、传输失败状态和上传槽位均由幂等清理路径处理。multipart 文件名按 UTF-8（含 RFC 5987 filename*）解析；只有后接 CRLF 或 -- 的序列才是边界，解析器单次内部切片最多 64 KiB。文件发布时在 SQLite BEGIN IMMEDIATE 事务内完成配额检查、对象发布和元数据写入，避免并发发布突破总配额。Git 忽略规则新增 SQLite 旁文件、server-secret.bin、objects/ 和 staging/。
+Codex 本地验证：PASS — `python -m compileall -q src tests`；`python -m pytest`（Python 3.13.7，48 passed, 1 skipped, 1 warning in 3.04s）；`python -m pip check`（No broken requirements found）；`git diff --check`；`git check-ignore` 已确认本地 SQLite、密钥和 objects/staging 均被忽略。新增测试包含 ASGI http.disconnect 的真实请求流、UTF-8/ASCII/空格文件名、非法 UTF-8、边界伪装及跨分块、64 KiB 有界转发、并发配额发布。
+GitHub Actions：本记录提交时，PR #3 前一提交的 Windows/Python 3.12 CI 为 PASS；本次最终补修提交推送后须以 PR #3 Checks 的对应运行结果为准，不能将其预先记为通过。
+真实设备验证：NOT_RUN — 未在手机、平板、真实 Wi-Fi/热点或跨设备 LAN 上执行上传下载/断线实验。
+仍未验证：受限 Windows 环境不能创建符号链接，reparse-point 测试仍跳过；HTTP 无 TLS；Range/If-Range、断点续传、前端、UDP 和分发调度未实现。
+```
+
 ## T003-A 验证记录（2026-11-09）
 
 ```text

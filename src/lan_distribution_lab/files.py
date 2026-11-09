@@ -102,17 +102,19 @@ class FileService:
         self._ensure_regular_file(sink.staging_path)
         content_sha256 = sink.digest.hexdigest()
         etag = f'"sha256:{content_sha256}"'
-        self._assert_capacity(sink.bytes_written)
         object_path = self.store.objects_dir / sink.file_id
-        try:
-            # A hard link is same-volume and fails if a collision already exists; it never replaces.
-            os.link(sink.staging_path, object_path)
-        except OSError as error:
-            raise _storage_error(error) from None
-
-        now = self.store.now_epoch()
+        linked = False
         try:
             with self.store.transaction() as connection:
+                # BEGIN IMMEDIATE serializes this check with file publication across
+                # processes sharing the SQLite state.  Active staging files may
+                # exist, but only one metadata/object publication can pass quota.
+                self._assert_capacity(connection, sink.bytes_written)
+                # A hard link is same-volume and fails if a collision already exists;
+                # it never replaces an immutable published object.
+                os.link(sink.staging_path, object_path)
+                linked = True
+                now = self.store.now_epoch()
                 connection.execute(
                     """
                     INSERT INTO file_metadata (
@@ -140,7 +142,8 @@ class FileService:
                     (sink.bytes_written, sink.bytes_written, now, sink.transfer_id),
                 )
         except Exception:
-            self._unlink_regular(object_path)
+            if linked:
+                self._unlink_regular(object_path)
             raise
         self._unlink_regular(sink.staging_path)
         record = FileRecord(
@@ -156,9 +159,16 @@ class FileService:
         return record, self.get_transfer_for_session(sink.session_id, sink.transfer_id)
 
     def fail_upload(self, sink: UploadSink, error_code: str) -> None:
-        sink.close()
-        self._unlink_regular(sink.staging_path)
-        self._finish_transfer(sink.transfer_id, "failed", sink.bytes_written, error_code)
+        # Cleanup is intentionally idempotent: the route's finally block may run
+        # after any point in multipart parsing or publication failure.
+        try:
+            sink.close()
+        except OSError:
+            pass
+        try:
+            self._unlink_regular(sink.staging_path)
+        finally:
+            self._finish_transfer(sink.transfer_id, "failed", sink.bytes_written, error_code)
 
     def list_files(self, limit: int) -> list[FileRecord]:
         with self.store.connection() as connection:
@@ -263,9 +273,8 @@ class FileService:
                 (state, bytes_transferred, error_code, now, transfer_id),
             )
 
-    def _assert_capacity(self, incoming_bytes: int) -> None:
-        with self.store.connection() as connection:
-            used = connection.execute("SELECT COALESCE(SUM(size_bytes), 0) FROM file_metadata").fetchone()[0]
+    def _assert_capacity(self, connection, incoming_bytes: int) -> None:
+        used = connection.execute("SELECT COALESCE(SUM(size_bytes), 0) FROM file_metadata").fetchone()[0]
         if used + incoming_bytes > self.store.settings.max_managed_bytes:
             raise ApiError(507, "insufficient_storage", "Managed storage quota is exhausted.")
         try:

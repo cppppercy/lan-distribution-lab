@@ -10,6 +10,7 @@ from urllib.parse import quote
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, ValidationError
+from starlette.requests import ClientDisconnect
 
 from .auth import (
     COOKIE_NAME,
@@ -152,6 +153,7 @@ def create_app(settings: Settings | None = None, *, runtime: Runtime | None = No
 
         sink: UploadSink | None = None
         completed = False
+        failure_code = "upload_failed"
         try:
             def on_file_start(_: str) -> None:
                 nonlocal sink
@@ -177,20 +179,21 @@ def create_app(settings: Settings | None = None, *, runtime: Runtime | None = No
             )
             completed = True
             return {"file": _file_payload(record), "transfer": _transfer_payload(transfer)}
-        except asyncio.CancelledError:
-            if sink is not None:
-                runtime_instance.files.fail_upload(sink, "cancelled")
+        except (asyncio.CancelledError, ClientDisconnect):
+            failure_code = "cancelled"
             raise
         except ApiError as error:
-            if sink is not None:
-                runtime_instance.files.fail_upload(sink, error.code)
+            failure_code = error.code
             raise
         except OSError as error:
-            if sink is not None:
-                runtime_instance.files.fail_upload(sink, "insufficient_storage")
+            failure_code = "insufficient_storage"
             raise ApiError(507, "insufficient_storage", "Managed storage is unavailable.") from error
         finally:
-            runtime_instance.upload_slots.release()
+            try:
+                if sink is not None and not completed:
+                    runtime_instance.files.fail_upload(sink, failure_code)
+            finally:
+                runtime_instance.upload_slots.release()
 
     @application.get("/api/files/{file_id}/content")
     def download_file(

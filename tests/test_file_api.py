@@ -3,17 +3,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import threading
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import ClientDisconnect
 
 from lan_distribution_lab.app import create_app
 from lan_distribution_lab.config import Settings
 from lan_distribution_lab.errors import ApiError
 from lan_distribution_lab.files import FileService
-from lan_distribution_lab.multipart import stream_single_file_multipart
+from lan_distribution_lab.multipart import MAX_STREAM_CHUNK_BYTES, stream_single_file_multipart
 from lan_distribution_lab.runtime import Runtime
 from lan_distribution_lab.storage import LocalStateStore
 
@@ -209,6 +211,195 @@ def test_interrupted_upload_sink_is_cleaned_and_not_marked_completed(file_enviro
     with runtime.store.connection() as connection:
         row = connection.execute("SELECT state, error_code FROM transfer_records").fetchone()
     assert tuple(row) == ("failed", "cancelled")
+
+
+def test_client_disconnect_cleans_staging_marks_transfer_and_releases_slot(file_environment) -> None:
+    settings, runtime, client = file_environment
+    token = _token(runtime, client)
+    app = create_app(settings, runtime=runtime)
+    partial_content = b"partial" * 100
+    body = (
+        b'--cut\r\nContent-Disposition: form-data; name="file"; filename="partial.txt"\r\n\r\n'
+        + partial_content
+    )
+    messages = iter(
+        (
+            {"type": "http.request", "body": body, "more_body": True},
+            {"type": "http.disconnect"},
+        )
+    )
+    async def receive():
+        return next(messages)
+
+    async def send(_message):
+        return None
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/uploads",
+        "raw_path": b"/api/uploads",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"authorization", f"Bearer {token}".encode()),
+            (b"content-type", b"multipart/form-data; boundary=cut"),
+        ],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+
+    with pytest.raises(ClientDisconnect):
+        asyncio.run(app(scope, receive, send))
+
+    assert list(runtime.store.staging_dir.iterdir()) == []
+    assert runtime.upload_slots.acquire(blocking=False)
+    runtime.upload_slots.release()
+    with runtime.store.connection() as connection:
+        row = connection.execute("SELECT state, error_code, bytes_transferred FROM transfer_records").fetchone()
+    assert row[0:2] == ("failed", "cancelled")
+    assert 0 < row[2] < len(partial_content)
+
+
+@pytest.mark.parametrize("filename", ["plain.txt", "file with spaces.txt", "中文 文件.txt"])
+def test_upload_preserves_utf8_and_ascii_filenames(file_environment, filename) -> None:
+    _, runtime, client = file_environment
+    token = _token(runtime, client)
+
+    response = _upload(client, token, filename, b"content")
+
+    assert response.status_code == 201
+    assert response.json()["file"]["display_name"] == filename
+
+
+def test_invalid_utf8_filename_is_rejected_and_cleaned(file_environment) -> None:
+    _, runtime, client = file_environment
+    token = _token(runtime, client)
+    body = (
+        b"--bad\r\nContent-Disposition: form-data; name=\"file\"; filename=\"bad\xff.txt\"\r\n\r\n"
+        b"content\r\n--bad--\r\n"
+    )
+
+    response = client.post(
+        "/api/uploads",
+        headers={**_headers(token), "Content-Type": "multipart/form-data; boundary=bad"},
+        content=body,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_input"
+    assert list(runtime.store.staging_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 19, 4096])
+def test_multipart_preserves_boundary_like_binary_content_across_chunks(chunk_size) -> None:
+    boundary = b"boundary"
+    content = b"prefix\r\n--boundaryXXX\x00middle\r\n--boundary-\x01suffix"
+    body = (
+        b"--boundary\r\n"
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"binary.bin\"\r\n\r\n"
+        + content
+        + b"\r\n--boundary--\r\n"
+    )
+
+    class FakeRequest:
+        headers = {"content-type": "multipart/form-data; boundary=boundary"}
+
+        async def stream(self):
+            for start in range(0, len(body), chunk_size):
+                yield body[start : start + chunk_size]
+
+    names: list[str] = []
+    received: list[bytes] = []
+    parsed = asyncio.run(
+        stream_single_file_multipart(
+            FakeRequest(),
+            maximum_request_bytes=8192,
+            on_file_start=names.append,
+            on_file_data=received.append,
+        )
+    )
+
+    assert parsed.filename == "binary.bin"
+    assert names == ["binary.bin"]
+    assert b"".join(received) == content
+    assert max(map(len, received)) <= max(chunk_size, len(boundary) + 5)
+
+
+def test_multipart_file_data_is_forwarded_in_bounded_chunks() -> None:
+    content = b"x" * (MAX_STREAM_CHUNK_BYTES * 3 + 17)
+    body = (
+        b"--bounded\r\n"
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"large.bin\"\r\n\r\n"
+        + content
+        + b"\r\n--bounded--\r\n"
+    )
+
+    class FakeRequest:
+        headers = {"content-type": "multipart/form-data; boundary=bounded"}
+
+        async def stream(self):
+            yield body
+
+    received: list[bytes] = []
+    asyncio.run(
+        stream_single_file_multipart(
+            FakeRequest(),
+            maximum_request_bytes=len(body),
+            on_file_start=lambda _: None,
+            on_file_data=received.append,
+        )
+    )
+
+    assert b"".join(received) == content
+    assert max(map(len, received)) <= MAX_STREAM_CHUNK_BYTES
+
+
+def test_concurrent_upload_publication_cannot_exceed_sqlite_quota(file_environment) -> None:
+    settings, _, _ = file_environment
+    limited = replace(
+        settings,
+        data_dir=settings.data_dir.parent / "concurrent-state",
+        managed_root=settings.managed_root.parent / "concurrent-managed",
+        max_managed_bytes=10,
+        max_active_uploads=2,
+    )
+    runtime = Runtime(limited, store=LocalStateStore(limited))
+    session_id = runtime.auth.exchange_pairing_code(
+        pairing_code=runtime.auth.create_pairing_code("read_write").code,
+        client_kind="cli",
+        device_label=None,
+        source="test",
+    ).session.session_id
+    sinks = [runtime.files.start_upload(session_id), runtime.files.start_upload(session_id)]
+    for sink in sinks:
+        sink.write(b"123456", limited.max_upload_bytes)
+    barrier = threading.Barrier(2)
+    outcomes: list[object] = []
+
+    def publish(sink) -> None:
+        barrier.wait()
+        try:
+            outcomes.append(runtime.files.finish_upload(sink, "same.txt"))
+        except ApiError as error:
+            runtime.files.fail_upload(sink, error.code)
+            outcomes.append(error)
+
+    workers = [threading.Thread(target=publish, args=(sink,)) for sink in sinks]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+
+    assert sum(not isinstance(outcome, ApiError) for outcome in outcomes) == 1
+    assert sum(isinstance(outcome, ApiError) and outcome.status_code == 507 for outcome in outcomes) == 1
+    with runtime.store.connection() as connection:
+        used = connection.execute("SELECT COALESCE(SUM(size_bytes), 0) FROM file_metadata").fetchone()[0]
+    assert used == 6
+    assert list(runtime.store.staging_dir.iterdir()) == []
 
 
 def test_upload_cookie_requires_origin_and_resource_slots_are_limited(file_environment) -> None:
