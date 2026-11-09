@@ -4,6 +4,14 @@ __pycache__/
 .venv/
 .test-temp/
 
+# Local LAN Distribution Lab state when a developer points it into this checkout
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+server-secret.bin
+objects/
+staging/
+
 # Test and type-checking artefacts
 .pytest_cache/
 .mypy_cache/

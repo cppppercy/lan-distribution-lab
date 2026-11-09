@@ -2,7 +2,7 @@
 
 面向局域网的可靠文件传输与多终端协同分发系统（课程项目）。
 
-> 项目状态：T001 最小工程基线已在本机验证。当前只实现本机健康接口；尚未实现文件传输、续传、设备发现、调度或页面 UI；不得将规划描述为已交付。
+> 项目状态：T003-A/B 的认证、会话、受控文件上传/下载与任务摘要已在本地自动化测试中验证；Range/续传、设备发现、调度、页面 UI 和真实设备验证尚未实现。默认服务仍只监听本机。
 
 ## 项目目标
 
@@ -27,7 +27,7 @@
 
 代码、密钥、真实成果以当前仓库与测试记录为准。本文不声称任何尚未执行的测试通过。
 
-## 当前可运行基线（T001）
+## 当前可运行基线（T001 + T003-A）
 
 ### 前置条件
 
@@ -66,10 +66,34 @@ status service
 ok     lan-distribution-lab
 ```
 
+### 本机生成配对码（T003-A）
+
+配对码只能由 Windows 主机上的命令行生成，**没有**对应的 LAN 管理 HTTP 接口。为避免“生成码的状态库”和服务端不一致，`pair create` 与 `serve` 必须使用同一组绝对 `--data-dir` 和 `--managed-root`；两个目录必须分离。
+
+```powershell
+$dataDir = Join-Path $env:LOCALAPPDATA "LANDistributionLab\state"
+$managedRoot = Join-Path $env:LOCALAPPDATA "LANDistributionLab\managed"
+
+python -m lan_distribution_lab pair create --scope read --data-dir $dataDir --managed-root $managedRoot
+python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managedRoot
+```
+
+`--scope` 可取 `read`（默认）或 `read_write`。命令显示一个由密码学安全随机数生成的六位数字码及 UTC 过期时间；它只能使用一次，默认十分钟过期。服务端使用同一 SQLite 状态库，以原子事务兑换码并创建最多八小时的会话。
+
+`POST /api/pairings` 已实现：浏览器必须提供与配置精确匹配的 `Origin`，成功后得到 `HttpOnly; SameSite=Strict; Path=/api` Cookie；CLI 才会在 JSON 响应体中一次性得到 Bearer token。服务端只保存 HMAC 摘要，不在 URL 或应用错误中输出令牌。`DELETE /api/sessions/current` 可撤销当前会话；Cookie 会话的撤销同样检查 `Origin`。
+
+当前 HTTP 未启用 TLS，Cookie 的 `Secure` 属性必须为假才能在 HTTP 工作。这些控制能拒绝未持有凭据的请求、缩短凭据有效期并抵御常见 CSRF；**不能**防止同一局域网的窃听或中间人。不要把配对码或 CLI token 发送给不可信对象，也不要将本机服务暴露到公网。
+
+### 文件 API（T003-B）
+
+服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载为完整 `200` 流，带 ETag 和安全下载名。没有浏览器页面或正式 Python CLI 文件客户端，暂不支持 Range、续传或上传幂等键。
+
+默认资源限制为单文件 64 MiB、请求 64 MiB + 128 KiB、受控对象总额 1 GiB、保留 64 MiB 磁盘空间、同时上传 2/下载 8。超限、配额不足或 `ENOSPC` 会失败且不发布部分文件。`managed_root/objects` 和 `managed_root/staging` 仅由服务端生成 UUID 名称；客户端文件名不会成为磁盘路径。
+
 ### 运行自动化测试
 
 ```powershell
 python -m pytest
 ```
 
-测试通过仅说明本地 HTTP 健康接口符合当前契约；它不等同于手机、平板、真实 Wi-Fi 或文件传输验证。详见 [当前架构](docs/ARCHITECTURE.md) 与 [实验记录](docs/EXPERIMENTS.md)。
+当前自动化测试覆盖健康接口、配对码一次性/过期/并发兑换、限速、Cookie/Bearer、权限范围、撤销、Origin、摘要存储与重启持久化。它不等同于手机、平板、真实 Wi-Fi、Windows ACL/reparse point 或文件传输验证。详见 [当前架构](docs/ARCHITECTURE.md)、[威胁模型](docs/THREAT_MODEL.md) 与 [实验记录](docs/EXPERIMENTS.md)。

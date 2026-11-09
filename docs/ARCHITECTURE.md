@@ -1,64 +1,59 @@
-# 当前架构（T001 实现 + T002 设计）
+# 当前架构（T003-B 实现）
 
-**状态**：T001 最小服务基线已实现；T002 已完成文件 API、安全与测试设计。只有健康检查已实现；文件传输、存储、认证、数据库、设备发现、CLI 续传、前端 UI 与调度仍未实现。
+**状态**：T003-A 的本机配对/会话/SQLite 基础与 T003-B 的文件传输后端均已实现并通过本地自动化测试。T003 整体仍为 `IN_PROGRESS`，等待最终代码审核；Range、CLI 续传、Web UI、UDP 与真实设备实验未实现。
 
-## 运行组成与边界
+## 组件与数据流
 
 ```mermaid
 flowchart LR
-    operator["Windows 操作者"] --> command["python -m lan_distribution_lab"]
-    command --> server["Uvicorn + FastAPI\n127.0.0.1:8000"]
-    client["本机 HTTP 客户端"] -->|"GET /api/health"| server
-    server --> response["JSON 健康响应"]
+    operator["Windows 操作者"] --> cli["pair create（仅本机 CLI）"]
+    cli --> state["SQLite + HMAC 服务器秘密"]
+    browser["浏览器 Cookie"] --> api["FastAPI /api"]
+    client["CLI Bearer"] --> api
+    api --> auth["认证、scope、Origin"]
+    api --> multipart["有界 multipart 流解析"]
+    multipart --> staging["managed_root/staging"]
+    staging --> objects["objects/<server UUID>"]
+    auth --> state
+    objects --> download["流式完整下载"]
+    api --> transfers["SQLite transfer_records"]
 ```
 
-服务入口为 `src/lan_distribution_lab/__main__.py`，固定使用 `127.0.0.1:8000`。它不会默认监听局域网接口、开放公网端口或修改 Windows 防火墙。显式 LAN 模式是后续任务的受控设计项，不属于 T001。
+默认入口 `python -m lan_distribution_lab` 仍固定监听 `127.0.0.1:8000`，不修改防火墙、不自动公开 LAN/公网。`pair create` 与 `serve` 必须使用同一组分离的绝对 `data_dir`、`managed_root`。
 
 ## 模块边界
 
-| 路径 | 当前职责 | 状态 |
-| --- | --- | --- |
-| `src/lan_distribution_lab/app.py` | FastAPI 应用与 HTTP 路由 | 已实现 |
-| `src/lan_distribution_lab/__main__.py` | 本地安全默认值的 Uvicorn 启动入口 | 已实现 |
-| `tests/test_health.py` | 健康接口的本地 HTTP 集成测试 | 已实现 |
-| 传输、存储、认证、调度、发现、Web UI | 后续按任务拆分 | 未实现（T002 已设计文件/会话边界） |
+| 模块 | 真实职责 |
+| --- | --- |
+| `app.py` | HTTP 路由、认证依赖、Origin/内容类型检查、响应头和受控槽位 |
+| `body.py` | 对配对 JSON 的有界 `Request.stream()` 累计读取 |
+| `multipart.py` | 单文件 multipart 的有界流解析；不调用框架表单缓存 |
+| `auth.py` | 配对码、令牌摘要、scope、撤销与流式分块时会话复核 |
+| `storage.py` | SQLite schema、事务、状态目录和服务器秘密 |
+| `files.py` | staging 写入、SHA-256、配额/磁盘检查、原子硬链接发布、对象读取和任务记录 |
+| `runtime.py` | 组合服务及上传/下载 `BoundedSemaphore` 槽位 |
 
-## 已实现接口契约
+## 已实现 API 与语义
 
-### `GET /api/health`
+- `GET /api/health`：公开 liveness。
+- `POST /api/pairings`：4 KiB 有界 JSON 读取；浏览器 Cookie 或 CLI Bearer 会话。
+- `DELETE /api/sessions/current`：首次有效撤销为 204；已撤销、过期或无效凭据再次为 401；Cookie 状态变更检查 Origin 并清理 Cookie。
+- `GET /api/files`、`GET /api/files/{file_id}`：`read` 会话后才查询；无效 UUID 为 422，不存在对象为 404，不暴露磁盘路径。
+- `POST /api/uploads`：`read_write` 会话；Cookie 请求检查 Origin；multipart 总请求、文件、总配额、可用磁盘和上传槽位均有限制。文件写入 staging 时分块计算 SHA-256，随后以服务端 UUID 硬链接发布到 objects，并写入 SQLite。
+- `GET /api/files/{file_id}/content`：`read` 会话下的完整 200 流，带 `Content-Length`、强 ETag、安全 `Content-Disposition` 与 `X-Transfer-Id`；不支持 Range。
+- `GET /api/transfers/{transfer_id}`：仅任务所属会话可见。`completed` 仅表示服务端读完/写完本地字节，**不表示远端客户端已经保存成功**。
 
-- 用途：公开、无敏感信息的进程/HTTP 服务存活检查。
-- 成功响应：`200 OK`，`application/json`，响应体严格为：
+## 安全与资源边界
 
-```json
-{"status":"ok","service":"lan-distribution-lab"}
-```
+默认值：单文件 64 MiB、multipart 总请求 64 MiB + 128 KiB、受控对象总额 1 GiB、保留 64 MiB 空闲空间、同时上传 2、下载 8。超过限制返回统一安全错误并清理 staging；`ENOSPC`/配额不足返回 507。上传和下载每个分块复核会话是否撤销或过期。
 
-- 错误边界：当前路由仅接受 GET；例如 `POST /api/health` 由 FastAPI 返回 `405 Method Not Allowed`。不存在的路径由框架返回 `404`。
-- 不代表：文件共享可用、授权有效、数据库可用或局域网可达；这些能力在 T001 尚未实现，不能从健康结果推断。
+客户端展示名从不决定对象路径，拒绝路径分隔符、Windows 保留字符、控制字符、`.` 与 `..`。对象/目录操作以服务端 UUID 并做普通文件、符号链接/reparse-point 检查；本机受限环境未能创建符号链接，因此真实 Windows 链接/reparse-point 竞态仍是未验证风险。
 
-## 启动与依赖
+## 明确未实现
 
-项目使用 `pyproject.toml`：直接运行/开发依赖均精确固定；`requirements.lock` 约束已解析的传递依赖。Python 支持范围为 3.12 至 3.13。Windows PowerShell 的实际命令见 [README](../README.md)。CI 使用 Python 3.12，在不需要密钥、外部业务服务或数据库的条件下运行同一 pytest 命令。T001 本机以 Python 3.13 实测 `pytest` 为 2 通过（含 1 条上游依赖弃用警告），并以实际本机 socket 请求验证了健康响应；PR #1 的 GitHub Actions 已在 Python 3.12 上通过。
+- `Range` / `If-Range` / 206（T005）
+- 上传 `Idempotency-Key` 与上传断点续传
+- Python CLI 续传、Vue 页面、UDP 发现、调度与公网部署
+- HTTPS、真实手机/平板、真实 LAN 性能/可靠性实验
 
-## T002 推荐资源架构（设计中）
-
-T003 应在现有 FastAPI HTTP 适配层之外，增加彼此独立的会话授权、文件对象存储、元数据和传输任务模块；不在路由函数中直接组合客户端路径或长期保存明文凭据。
-
-```mermaid
-flowchart LR
-    api["FastAPI routes"] --> auth["Pairing and session service"]
-    api --> files["File catalog and object service"]
-    api --> transfers["Transfer task service"]
-    auth --> metadata["Session and metadata store"]
-    files --> metadata
-    transfers --> metadata
-    files --> root["managed_root\nobjects and staging"]
-```
-
-- **HTTP 适配层**：验证请求形态、返回统一错误、流式传输；只接收 UUID 和展示名，不接收服务器路径。
-- **会话服务**：短时一次性配对码换取限时 `read` / `read_write` 会话；浏览器使用 HttpOnly Cookie，CLI 使用 Bearer token，服务端只保存摘要。
-- **对象服务**：以服务器生成的 `file_id` 和 `storage_key` 管理不可变快照；上传先进入私有 staging，完成 SHA-256、配额检查后原子发布。
-- **元数据与任务服务**：维护 `FileRecord`、`SessionRecord` 和 `TransferRecord` 的最小字段；T003 是否立即使用 SQLite 尚未决定，不能在实现前假定已有数据库。
-
-完整 HTTP 契约、文件模型及 Range/ETag 扩展路径见 [API_CONTRACT.md](API_CONTRACT.md)；信任边界与残余风险见 [THREAT_MODEL.md](THREAT_MODEL.md)；分阶段测试见 [TEST_PLAN.md](TEST_PLAN.md)。
+HTTP 没有 TLS：短时令牌、Cookie 和文件内容仍可能被同网段窃听或篡改。完整契约见 [API_CONTRACT.md](API_CONTRACT.md)，风险见 [THREAT_MODEL.md](THREAT_MODEL.md)。

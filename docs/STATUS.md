@@ -1,7 +1,7 @@
 # 当前项目状态
 
-**更新日期**：2026-11-08  
-**整体状态**：T001 最小工程已验证；T002 的 API、安全与测试设计已完成。运行时代码仍只提供健康接口，文件业务尚未实现。
+**更新日期**：2026-11-09
+**整体状态**：T003-A/B 的认证、受控文件上传/下载、SQLite 元数据和传输摘要已实现并完成本地自动化验证；T003 整体仍为 IN_PROGRESS，等待最终代码审核。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -9,8 +9,8 @@
 - 用户确认局域网基本连接没有问题；项目专用服务的连通性/性能尚无运行记录。
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
-- 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health` 与 pytest：**IMPLEMENTED**。
-- 文件传输、设备发现、续传、多客户端分发：**NOT_IMPLEMENTED**。
+- 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；设备发现、续传、多客户端分发：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
@@ -18,7 +18,48 @@
 ## 当前任务
 - **T001 — DONE**：最小工程初始化、健康接口、自动化测试、CI 配置和启动说明已按任务边界完成。完整证据见下方记录与 `docs/TASKS.md`。
 - **T002 — DONE**：API 契约、安全威胁模型和测试方案已完成，且未越界实现文件业务。详见 `docs/API_CONTRACT.md`、`docs/THREAT_MODEL.md`、`docs/TEST_PLAN.md`。
-- 下一关卡：可在审查 T002 设计后进入 T003；G1 的文件收发、真实设备和真实 LAN 证据仍未获得。
+- **T003-A — DONE**：配对码、会话、撤销、scope 与存储基础实现完成并完成有界请求读取补修。
+- **T003-B — DONE（实现与本地测试）**：受控上传/下载、SHA-256、SQLite 文件/任务摘要与安全测试已完成。
+- **T003 — IN_PROGRESS**：T003-A/B 均已实现，但整体必须经最终代码审核后才能标记 DONE。
+- 下一关卡：审核通过后可进入 T004 或 T005；真实设备和真实 LAN 证据仍未获得。
+
+## T003-B 验证记录（2026-11-09）
+
+```text
+时间：2026-11-09
+任务：T003-B — 受控文件上传、下载、校验及任务记录
+实际代码变化：有界 multipart 流解析；staging→服务器 UUID objects 发布；SHA-256、SQLite file_metadata/transfer_records、文件列表/元数据/完整下载、受控任务查询、请求/文件/配额/磁盘/并发限制与清理。
+测试：PASS — `python -m compileall -q src tests`；`python -m pytest`（Python 3.13.7：37 passed, 1 skipped, 1 warning in 2.37s）；`python -m pip check`（No broken requirements found）。pytest 覆盖文件上传下载、完整性、0 B、Unicode/重名、权限/撤销、路径/展示名、配额、ENOSPC 注入、上传清理、任务隐私、Cookie Origin、槽位和流式超限读取。
+真实设备证据：NOT_RUN；未测试手机、平板、真实 Wi-Fi、热点或公网。
+已知限制：不支持 Range、If-Range、上传幂等键或续传；HTTP 无 TLS；Windows 受限测试环境无法创建符号链接，reparse-point 竞态未验证。
+```
+
+## T003 最终验收补修记录（2026-11-09）
+
+```text
+时间：2026-11-09
+任务：PR #3 的 T003 最终验收补修
+实际代码变化：上传路由将 ClientDisconnect、取消、解析/API/存储异常统一收敛到 finally 清理；staging 文件、传输失败状态和上传槽位均由幂等清理路径处理。multipart 文件名按 UTF-8（含 RFC 5987 filename*）解析；只有后接 CRLF 或 -- 的序列才是边界，解析器单次内部切片最多 64 KiB。文件发布时在 SQLite BEGIN IMMEDIATE 事务内完成配额检查、对象发布和元数据写入，避免并发发布突破总配额。Git 忽略规则新增 SQLite 旁文件、server-secret.bin、objects/ 和 staging/。
+Codex 本地验证：PASS — `python -m compileall -q src tests`；`python -m pytest`（Python 3.13.7，48 passed, 1 skipped, 1 warning in 3.04s）；`python -m pip check`（No broken requirements found）；`git diff --check`；`git check-ignore` 已确认本地 SQLite、密钥和 objects/staging 均被忽略。新增测试包含 ASGI http.disconnect 的真实请求流、UTF-8/ASCII/空格文件名、非法 UTF-8、边界伪装及跨分块、64 KiB 有界转发、并发配额发布。
+GitHub Actions：PASS — PR #3 的最终补修代码提交 `40945a93a721f47162f9a2033b6994c3c3ac913e` 已在 Windows / Python 3.12 通过两次触发的 pytest 工作流（分别 42 秒、47 秒）。本记录的后续文档提交不改变该代码验证结论，PR 当前提交状态仍应以 Checks 为准。
+真实设备验证：NOT_RUN — 未在手机、平板、真实 Wi-Fi/热点或跨设备 LAN 上执行上传下载/断线实验。
+仍未验证：受限 Windows 环境不能创建符号链接，reparse-point 测试仍跳过；HTTP 无 TLS；Range/If-Range、断点续传、前端、UDP 和分发调度未实现。
+```
+
+## T003-A 验证记录（2026-11-09）
+
+```text
+时间：2026-11-09
+任务：T003-A — 安全配对、会话授权与存储基础
+基线 SHA：b65f2a8b673d92ecb81470e28e826e1adb8f185d（PR #2 合并后的 main）
+实际代码变化：本机 argparse 配对命令；FastAPI 配对/撤销端点；统一安全错误；HMAC 摘要的六码/令牌；SQLite 会话、限速和 file_metadata 基础表；受控 objects/staging 目录；可复用 read/read_write 依赖。
+测试命令和结果：PASS — .\.venv\Scripts\python.exe -m pytest（Python 3.13.7；20 passed, 1 warning in 1.30s）；并短暂以独立临时目录运行 `pair create` 与 `serve --port 8033`，对 `http://127.0.0.1:8033/api/health` 的实际请求通过后已停止进程。pytest 覆盖健康回归、配对有效性/过期/重复/并发、限速、Cookie/Bearer、scope、撤销、Origin、日志/数据库不含明文秘密、重启持久化和目录隔离。
+真实设备证据：NOT_RUN；未测试手机、平板、真实 Wi-Fi、热点或公开 LAN。
+已知失败/未运行项：warning 为 Starlette TestClient 使用 AnyIO 已弃用类型别名。未做 Windows ACL/reparse-point 行为验证；HTTP 不提供 TLS 机密性；文件上传/下载、配额、SHA-256 文件校验、Range、任务记录均未实现。
+GitHub Actions：PASS — [分支推送](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42543573951/job/128923646789)（39 秒）与 [PR #3](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42543609733/job/128923758919)（40 秒）均在 Windows / Python 3.12 成功运行 pytest。
+当前分支、工作区状态、PR：`feat/T003A-auth-storage`；[PR #3](https://github.com/cppppercy/lan-distribution-lab/pull/3)，未合并。
+下一任务：T003-B，前提为 T003-A 审查；其实现不得绕过现有会话、scope、目录隔离和默认 localhost 策略。
+```
 
 ## T002 验证记录（2026-11-08）
 
