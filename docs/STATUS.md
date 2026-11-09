@@ -32,8 +32,8 @@
 测试命令和结果：PASS — .\.venv\Scripts\python.exe -m pytest（Python 3.13.7；20 passed, 1 warning in 1.30s）；并短暂以独立临时目录运行 `pair create` 与 `serve --port 8033`，对 `http://127.0.0.1:8033/api/health` 的实际请求通过后已停止进程。pytest 覆盖健康回归、配对有效性/过期/重复/并发、限速、Cookie/Bearer、scope、撤销、Origin、日志/数据库不含明文秘密、重启持久化和目录隔离。
 真实设备证据：NOT_RUN；未测试手机、平板、真实 Wi-Fi、热点或公开 LAN。
 已知失败/未运行项：warning 为 Starlette TestClient 使用 AnyIO 已弃用类型别名。未做 Windows ACL/reparse-point 行为验证；HTTP 不提供 TLS 机密性；文件上传/下载、配额、SHA-256 文件校验、Range、任务记录均未实现。
-GitHub Actions：NOT_RUN；本记录生成时尚未推送 T003-A 分支，推送后应查看 PR 工作流结果。
-当前分支、工作区状态、PR：`feat/T003A-auth-storage`；提交与 PR 在本任务收尾后以 GitHub 记录为准。
+GitHub Actions：PASS — [分支推送](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42543573951/job/128923646789)（39 秒）与 [PR #3](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42543609733/job/128923758919)（40 秒）均在 Windows / Python 3.12 成功运行 pytest。
+当前分支、工作区状态、PR：`feat/T003A-auth-storage`；[PR #3](https://github.com/cppppercy/lan-distribution-lab/pull/3)，未合并。
 下一任务：T003-B，前提为 T003-A 审查；其实现不得绕过现有会话、scope、目录隔离和默认 localhost 策略。
 ```
 

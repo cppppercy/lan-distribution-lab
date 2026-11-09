@@ -65,7 +65,7 @@
 
 **完成内容（2026-11-09）**：实现本机 `pair create` 控制命令、六位一次性十分钟配对码、`POST /api/pairings`、浏览器 HttpOnly/SameSite Cookie、CLI Bearer token、`DELETE /api/sessions/current`、scope 依赖、SQLite 会话/限速状态与受控 `objects`/`staging` 目录基础。服务仍默认绑定 `127.0.0.1`，未创建任何文件业务 API。
 
-**验收证据**：`.\.venv\Scripts\python.exe -m pytest` 于 Python 3.13.7 下通过 `20 passed, 1 warning in 1.23s`。测试使用独立临时目录，覆盖有效/重复/过期/并发兑换、失败锁定、Cookie/Bearer、权限范围、撤销、Origin、无明文 token、重启持久化与原健康接口。warning 为上游 Starlette TestClient 对 AnyIO 弃用类型别名的提示。
+**验收证据**：`.\.venv\Scripts\python.exe -m pytest` 于 Python 3.13.7 下通过 `20 passed, 1 warning in 1.30s`；PR #3 的 GitHub Actions 在 Windows / Python 3.12 也通过。测试使用独立临时目录，覆盖有效/重复/过期/并发兑换、失败锁定、Cookie/Bearer、权限范围、撤销、Origin、无明文 token、重启持久化与原健康接口。warning 为上游 Starlette TestClient 对 AnyIO 弃用类型别名的提示。
 
 **未验证/非目标**：未做真实设备、真实 LAN、Windows ACL/reparse-point、TLS 或任何文件上传/下载测试；不将这些项目标为完成。
 

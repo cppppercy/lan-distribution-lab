@@ -70,5 +70,6 @@
 | --- | --- | --- |
 | T001 健康接口回归 | PASS（T003-A） | Python 3.13.7，`20 passed, 1 warning in 1.23s` 中保留 2 项健康断言 |
 | T003-A 配对/会话/Origin/存储基础 | PASS（本地自动化） | `tests/test_auth_storage.py`：有效/重复/过期/并发兑换、限速、Cookie/Bearer、scope、撤销、Origin、日志/摘要、重启与目录隔离 |
+| T003-A GitHub Actions | PASS（PR #3） | Windows / Python 3.12 运行 pytest 成功；分支推送 39 秒、PR 检查 40 秒 |
 | T003-B 文件、路径、配额、清理 | NOT_RUN | 本子任务严格不实现文件上传/下载；TP-010、TP-020--041 的文件业务部分留给 T003-B |
 | Range、CLI 续传、真实设备/真实 LAN | NOT_RUN | 分别留给 T005、T006、T004/G1；未把本机测试描述为真实设备验证 |
