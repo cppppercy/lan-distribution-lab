@@ -13,8 +13,8 @@
 | T003 | DONE | 后端受控共享文件、列表、下载、上传与校验；T003-A/B 已合并并通过最终补修审核 | G1 | T002 |
 | T003-A | DONE | 本机配对码、会话授权、SQLite 状态和受控存储目录基础 | G1-A | T002 |
 | T003-B | DONE | 受控文件上传/下载、校验、元数据与传输记录 | G1-B | T003-A |
-| T004 | IN_PROGRESS | Vue 响应式界面、同源静态托管和显式 LAN 启动已实现；等待真实手机/平板互通记录 | G1 | T003 |
-| T005 | TODO | HTTP Range/版本保护/边界测试 | G2 | T003 |
+| T004 | IN_PROGRESS | Vue 响应式界面、同源静态托管、显式 LAN 启动和 Windows 自动选址启动脚本已实现；手机热点基础互传已验证，G1 剩余人工项目待补验 | G1 | T003 |
+| T005 | IN_PROGRESS | 单 HTTP Range、If-Range 版本保护、范围任务语义与边界测试已实现；等待审查/PR 验证 | G2 | T003 |
 | T006 | TODO | Python CLI 断点续传、失败恢复、完整性验证 | G2 | T005 |
 | T007 | TODO | 多会话任务记录、顺序与普通并发策略 | G3 | T006 |
 | T008 | TODO | 受控并发策略与调度实验入口 | G3 | T007 |
@@ -81,11 +81,21 @@
 
 ### T004（局域网 Web 界面与多终端互通）
 
-**完成内容（2026-11-09）**：新增 Vue 3 + TypeScript + Vite 单页界面，同源提供 Cookie 配对、文件列表、XHR 上传进度、浏览器原生下载发起、错误/加载/空状态和退出会话。FastAPI 在 `web/dist` 构建存在时提供静态页面；`serve --host <私有 IPv4>` 显式启用 LAN，拒绝 all-interface 和公网绑定，并以监听 URL 作为默认 Cookie Origin。CI 同时运行 npm 安装、前端测试/构建和 Python pytest。
+**完成内容（2026-11-09）**：新增 Vue 3 + TypeScript + Vite 单页界面，同源提供 Cookie 配对、文件列表、XHR 上传进度、浏览器原生下载发起、错误/加载/空状态和退出会话。FastAPI 在 `web/dist` 构建存在时提供静态页面；`serve --host <私有 IPv4>` 显式启用 LAN，拒绝 all-interface 和公网绑定，并以监听 URL 作为默认 Cookie Origin。`scripts/start-lan.ps1` 让 Windows 用户可一条命令完成私有地址选择、Web 构建、读写配对码创建和服务启动：优先移动热点 `192.168.137.1`，多网卡歧义时必须显式指定地址。CI 同时运行 npm 安装、前端测试/构建和 Python pytest。
 
-**验收证据**：本地前端 `npm run test` 和 `npm run build`、完整 Python pytest、FastAPI 实际 localhost 静态页面/健康接口请求均已执行；具体结果记录在 `docs/STATUS.md`。前端不存储访问 token，不引入 CORS 绕过认证；上传/下载仍复用 T003 API 与安全限制。
+**验收证据**：本地前端 `npm run test` 和 `npm run build`、完整 Python pytest、FastAPI 实际 localhost 静态页面/健康接口请求均已执行；Windows 自动启动脚本也已在当前移动热点地址完成地址选择、生产构建、配对码创建、监听和健康接口请求验证。具体结果记录在 `docs/STATUS.md`。前端不存储访问 token，不引入 CORS 绕过认证；上传/下载仍复用 T003 API 与安全限制。
 
-**未验证/非目标**：真实手机、平板、家庭 Wi-Fi/热点互通必须由用户按 README 的人工步骤执行并记录，不能标记 PASS；HTTP Range/续传、UDP、P2P、分发调度、HTTPS 和防火墙修改不在范围内。
+**真实设备记录（2026-11-09，用户提供）**：Windows 移动热点、服务 `192.168.137.1:8003`；手机成功加载 Vue 页面，Windows 电脑与手机用独立 `read_write` 配对码完成配对，用户确认已双向文件收发成功。校园 Wi-Fi 曾超时，原因未确认。**仍待补验**：平板、文件大小与设备/浏览器信息、SHA-256 对照、断线实验；因此 T004 仍为 IN_PROGRESS，G1 不应宣告完整通过。
+
+**非目标**：HTTP Range/续传、UDP、P2P、分发调度、HTTPS 和防火墙修改不在范围内。
+
+### T005（HTTP Range 与文件版本保护）
+
+**完成内容（待审查）**：`GET /api/files/{file_id}/content` 在保留无 Range 完整 `200` 下载的基础上，实现 RFC 9110 单一 `bytes=start-end`、`start-` 与 `-suffixLength`。可满足请求为 `206`，带正确 `Content-Range`、`Content-Length`、`Accept-Ranges` 和强 ETag；多范围/非法语法为 `400`，不可满足范围为 `416` 且带 `Content-Range: bytes */total`。`If-Range` 只接受精确的强 ETag；不匹配时回退完整 `200`。范围流通过 seek 和剩余字节计数读取，不缓存整个对象；范围任务字节数仅记录该次响应范围。
+
+**验收证据（本地）**：文件 API 自动化覆盖 200/206/416、精确/开放/后缀/截断范围、空文件、非法和多范围、未授权、If-Range、范围拼接 SHA-256、seek/read 上界、传输状态与下载槽位释放；完整套件/CI 结果见 `docs/STATUS.md`。
+
+**非目标**：多范围 MIME 响应、上传续传、T006 Python CLI 断点续传、UDP、P2P、分发调度。
 
 ### T003 及后续任务共同模板
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
@@ -31,6 +32,19 @@ from .multipart import stream_single_file_multipart
 from .runtime import Runtime, RuntimeProvider
 
 PAIRING_BODY_MAX_BYTES = 4 * 1024
+MAX_RANGE_INTEGER_DIGITS = 20
+
+
+@dataclass(frozen=True, slots=True)
+class ByteRange:
+    """An inclusive, already-clamped byte range for an immutable object."""
+
+    start: int
+    end: int
+
+    @property
+    def length(self) -> int:
+        return self.end - self.start + 1
 
 
 class PairingRequest(BaseModel):
@@ -210,10 +224,21 @@ def create_app(
     ) -> StreamingResponse:
         runtime_instance = get_runtime(request)
         record = runtime_instance.files.get_file(file_id)
+        selected_range = _select_byte_range(
+            request.headers.get("range"),
+            request.headers.get("if-range"),
+            record.etag,
+            record.size_bytes,
+        )
+        planned_bytes = record.size_bytes if selected_range is None else selected_range.length
         if not runtime_instance.download_slots.acquire(blocking=False):
             raise ApiError(503, "service_unavailable", "No download slot is available.")
         try:
-            transfer = runtime_instance.files.start_download(authenticated.session.session_id, record)
+            transfer = runtime_instance.files.start_download(
+                authenticated.session.session_id,
+                record,
+                size_bytes=planned_bytes,
+            )
         except Exception:
             runtime_instance.download_slots.release()
             raise
@@ -223,14 +248,18 @@ def create_app(
             completed = False
             try:
                 with runtime_instance.files.open_download(record) as source:
-                    while True:
+                    if selected_range is not None:
+                        source.seek(selected_range.start)
+                    remaining = planned_bytes
+                    while remaining:
                         runtime_instance.auth.ensure_session_active(authenticated.session.session_id)
-                        chunk = source.read(CHUNK_BYTES)
+                        chunk = source.read(min(CHUNK_BYTES, remaining))
                         if not chunk:
-                            break
+                            raise OSError("downloaded byte range ended early")
                         bytes_sent += len(chunk)
+                        remaining -= len(chunk)
                         yield chunk
-                if bytes_sent != record.size_bytes:
+                if bytes_sent != planned_bytes:
                     raise OSError("downloaded byte count changed")
                 runtime_instance.files.complete_download(transfer.transfer_id, bytes_sent)
                 completed = True
@@ -245,15 +274,23 @@ def create_app(
                     runtime_instance.files.fail_download(transfer.transfer_id, bytes_sent, "download_failed")
                 runtime_instance.download_slots.release()
 
+        headers = {
+            "Content-Length": str(planned_bytes),
+            "Accept-Ranges": "bytes",
+            "ETag": record.etag,
+            "Content-Disposition": _content_disposition(record.display_name),
+            "X-Transfer-Id": transfer.transfer_id,
+        }
+        status_code = 200
+        if selected_range is not None:
+            headers["Content-Range"] = f"bytes {selected_range.start}-{selected_range.end}/{record.size_bytes}"
+            status_code = 206
+
         return StreamingResponse(
             content(),
+            status_code=status_code,
             media_type="application/octet-stream",
-            headers={
-                "Content-Length": str(record.size_bytes),
-                "ETag": record.etag,
-                "Content-Disposition": _content_disposition(record.display_name),
-                "X-Transfer-Id": transfer.transfer_id,
-            },
+            headers=headers,
         )
 
     @application.get("/api/transfers/{transfer_id}")
@@ -282,6 +319,71 @@ def _parse_list_limit(value: str | None) -> int:
     if not value.isdecimal() or not 1 <= int(value) <= 100:
         raise ApiError(422, "invalid_input", "limit must be an integer from 1 to 100.")
     return int(value)
+
+
+def _select_byte_range(
+    range_header: str | None,
+    if_range: str | None,
+    etag: str,
+    total_size: int,
+) -> ByteRange | None:
+    """Return a single satisfiable range, or None when a full response is required.
+
+    If-Range deliberately accepts only an exact strong ETag.  A different or weak
+    validator means the Range is ignored, so a resume client receives a complete
+    immutable snapshot instead of bytes from an assumed older version.
+    """
+    if range_header is None:
+        return None
+    if if_range is not None and if_range != etag:
+        return None
+
+    header = range_header.strip()
+    if not header.startswith("bytes="):
+        raise ApiError(400, "invalid_range", "Range must use the bytes unit.")
+    specification = header.removeprefix("bytes=")
+    if not specification or "," in specification:
+        raise ApiError(400, "invalid_range", "Only one byte range is supported.")
+    if specification.count("-") != 1:
+        raise ApiError(400, "invalid_range", "Range syntax is invalid.")
+
+    start_text, end_text = specification.split("-", maxsplit=1)
+    if start_text:
+        start = _parse_range_integer(start_text)
+        if start is None:
+            raise ApiError(400, "invalid_range", "Range syntax is invalid.")
+        if end_text:
+            end = _parse_range_integer(end_text)
+            if end is None:
+                raise ApiError(400, "invalid_range", "Range syntax is invalid.")
+        else:
+            end = total_size - 1
+        if start >= total_size or end < start:
+            raise _range_not_satisfiable(total_size)
+        return ByteRange(start=start, end=min(end, total_size - 1))
+
+    suffix_length = _parse_range_integer(end_text)
+    if suffix_length is None or suffix_length == 0:
+        raise ApiError(400, "invalid_range", "Range syntax is invalid.")
+    if total_size == 0:
+        raise _range_not_satisfiable(total_size)
+    length = min(suffix_length, total_size)
+    return ByteRange(start=total_size - length, end=total_size - 1)
+
+
+def _parse_range_integer(value: str) -> int | None:
+    if not value.isascii() or not value.isdecimal() or len(value) > MAX_RANGE_INTEGER_DIGITS:
+        return None
+    return int(value)
+
+
+def _range_not_satisfiable(total_size: int) -> ApiError:
+    return ApiError(
+        416,
+        "range_not_satisfiable",
+        "The requested byte range is not satisfiable.",
+        headers={"Content-Range": f"bytes */{total_size}", "Accept-Ranges": "bytes"},
+    )
 
 
 def _file_payload(record: FileRecord) -> dict[str, object]:

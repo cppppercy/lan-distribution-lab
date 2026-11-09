@@ -1,6 +1,6 @@
 # 文件 API 契约（T002 设计）
 
-**状态**：T003-A 与 T003-B 的健康、配对、会话、文件列表/元数据、上传、完整下载和传输摘要已实现并有本地自动化测试。HTTP Range/If-Range、上传幂等键、CLI 续传、Web UI 与真实设备验证仍未实现；不得将这些规划描述为已交付。
+**状态**：T003-A/T003-B 的健康、配对、会话、文件列表/元数据、上传、完整下载和传输摘要，以及 T004 同源 Web UI 均已实现。T005 已实现单一 HTTP `Range`、强 ETag `If-Range` 与范围下载任务记录并有本地自动化测试；上传幂等键、CLI 续传和多范围仍未实现。真实设备验证仅有手机热点基础收发证据，不得外推为完整 G1 验收。
 
 ## 1. 范围、版本与通用约定
 
@@ -77,7 +77,7 @@ flowchart LR
 | `GET /api/files` | `read` | **已实现（T003-B）** | T003-B |
 | `GET /api/files/{file_id}` | `read` | **已实现（T003-B）** | T003-B |
 | `POST /api/uploads` | `read_write` | **已实现；无 Idempotency-Key（T003-B）** | T003-B |
-| `GET /api/files/{file_id}/content` | `read` | **已实现完整 200；Range 于 T005** | T003-B/T005 |
+| `GET /api/files/{file_id}/content` | `read` | **已实现完整 200、单 Range/If-Range（T005）** | T003-B/T005 |
 | `GET /api/transfers/{transfer_id}` | 任务所属会话 | **已实现（T003-B）** | T003-B |
 | `DELETE /api/sessions/current` | 是 | **已实现（T003-A）** | T003-A |
 
@@ -167,14 +167,11 @@ CLI 响应额外含 `access_token`，浏览器响应不得含该字段。配对�
 
 ### 3.6 `GET /api/files/{file_id}/content`
 
-- **调用方/用途**：获 `read` 权限的浏览器/CLI，流式下载一个已发布的内容快照（FR-004）。**T003-B 已实现无 Range 的完整 `200` 流。**
-- **请求**：`file_id` UUID。T003 只支持无 `Range` 的完整 `200` 流；响应带 `Content-Length`、安全编码的 `Content-Disposition`、`ETag: "sha256:<hex>"` 和可选 `Digest`。不得一次性读入内存。
-- **完整下载响应**：`200`；文件读取失败时不得伪造完整成功，记录失败任务并按安全方式中止连接。
-- **后续 Range（T005，不是当前实现）**：
-  - 仅接受单一 `Range: bytes=start-end`；可满足时 `206`，带 `Content-Range`、`Content-Length`、相同强 ETag 和 `Accept-Ranges: bytes`。
-  - 不可满足范围返回 `416`，带 `Content-Range: bytes */<size>`；多范围显式拒绝为 `400 invalid_range`。
-  - `If-Range` 与当前强 ETag 匹配时才返回 `206`；不匹配时按 HTTP 语义忽略 Range 并返回完整 `200`。CLI 收到本应续传却变为 `200` 时必须丢弃/隔离旧部分，不能追加。
-- **限制与幂等性**：安全、幂等；每个会话受并发下载槽位、响应超时和带宽/排队策略限制。文件快照不可变，因此同一 `file_id` 的 ETag 不应变化；未来替换一律新建对象。
+- **调用方/用途**：获 `read` 权限的浏览器/CLI，流式下载一个已发布的内容快照（FR-004）。
+- **请求/完整响应**：无 `Range` 时返回完整 `200`，带 `Content-Length`、`Accept-Ranges: bytes`、安全编码的 `Content-Disposition` 和强 `ETag: "sha256:<hex>"`；不得一次性读入内存。
+- **单范围响应（T005 已实现）**：只接受 `Range: bytes=start-end`、`bytes=start-` 或 `bytes=-suffixLength`。可满足时返回 `206`，带 `Content-Range`、所选范围的 `Content-Length`、相同强 ETag 和 `Accept-Ranges: bytes`；范围结尾超过对象大小时截断到最后一字节。
+- **拒绝/版本保护**：多范围或非法语法为 `400 invalid_range`；不可满足范围（含空文件的任意范围）为 `416 range_not_satisfiable`，带 `Content-Range: bytes */<size>`。只有 `If-Range` 与当前强 ETag 完全匹配才返回 `206`；弱 ETag、日期或不匹配值均忽略 Range 并返回完整 `200`，避免把不同版本错误拼接。CLI 收到本应续传却变为 `200` 时必须丢弃/隔离旧部分，不能追加。
+- **任务与限制**：安全、幂等；每个会话受并发下载槽位、响应超时和带宽/排队策略限制。范围任务的 `size_bytes`/`bytes_transferred` 均表示本次选中范围，而非整个对象；`completed` 仅表示服务端已读完该响应范围，不表示远端保存成功。文件快照不可变，因此同一 `file_id` 的 ETag 不应变化；未来替换一律新建对象。
 
 ### 3.7 `GET /api/transfers/{transfer_id}`
 
@@ -252,5 +249,5 @@ managed_root/
 
 - **T003**：T003-A/B 已实现配对/会话、受控根目录、完整上传下载、SHA-256、SQLite 元数据/任务摘要及 P0 自动化测试；仍不实现 Range 或 CLI 续传。T003 整体状态须待最终代码审核后更新。
 - **T004**：同源移动端 UI 使用浏览器 Cookie，不在前端存储访问令牌；用真实手机和平板做基础收发验证。
-- **T005/T006**：实现单 Range、`If-Range`/ETag 检查和 CLI 的隔离重试；不得把完整 `200` 当成可续接的 `206`。
+- **T005/T006**：T005 已实现单 Range 与 `If-Range`/ETag 检查；T006 再实现 CLI 的隔离重试，且不得把完整 `200` 当成可续接的 `206`。
 - **未决项**：文件保留/删除策略、上传幂等键、HTTPS 配对升级时机与真实 Windows reparse-point 竞态防护；它们不应被误写为已完成。

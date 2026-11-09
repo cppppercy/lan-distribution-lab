@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import os
 import threading
 from dataclasses import replace
@@ -90,6 +91,148 @@ def test_upload_list_metadata_download_and_transfer_integrity(file_environment) 
     )
     assert transfer.json()["state"] == "completed"
     assert transfer.json()["bytes_transferred"] == len(content)
+
+
+def test_single_byte_ranges_if_range_and_reassembled_hash(file_environment) -> None:
+    _, runtime, client = file_environment
+    token = _token(runtime, client)
+    content = bytes(range(64))
+    uploaded = _upload(client, token, "range.bin", content).json()["file"]
+    url = f"/api/files/{uploaded['file_id']}/content"
+
+    full = client.get(url, headers=_headers(token))
+    assert full.status_code == 200
+    assert full.content == content
+    assert full.headers["accept-ranges"] == "bytes"
+    assert full.headers["content-length"] == str(len(content))
+
+    exact = client.get(url, headers={**_headers(token), "Range": "bytes=0-0"})
+    assert exact.status_code == 206
+    assert exact.content == content[:1]
+    assert exact.headers["content-range"] == f"bytes 0-0/{len(content)}"
+    assert exact.headers["content-length"] == "1"
+    assert exact.headers["etag"] == uploaded["etag"]
+    exact_transfer = client.get(
+        f"/api/transfers/{exact.headers['x-transfer-id']}", headers=_headers(token)
+    ).json()
+    assert exact_transfer["state"] == "completed"
+    assert exact_transfer["bytes_transferred"] == exact_transfer["size_bytes"] == 1
+
+    open_ended = client.get(url, headers={**_headers(token), "Range": "bytes=60-"})
+    suffix = client.get(url, headers={**_headers(token), "Range": "bytes=-4"})
+    clamped = client.get(url, headers={**_headers(token), "Range": "bytes=62-9999"})
+    assert open_ended.content == suffix.content == content[60:]
+    assert clamped.content == content[62:]
+    assert open_ended.headers["content-range"] == f"bytes 60-63/{len(content)}"
+    assert suffix.headers["content-range"] == f"bytes 60-63/{len(content)}"
+    assert clamped.headers["content-range"] == f"bytes 62-63/{len(content)}"
+
+    pieces = [
+        client.get(url, headers={**_headers(token), "Range": "bytes=0-19"}).content,
+        client.get(url, headers={**_headers(token), "Range": "bytes=20-39"}).content,
+        client.get(url, headers={**_headers(token), "Range": "bytes=40-"}).content,
+    ]
+    assert hashlib.sha256(b"".join(pieces)).hexdigest() == uploaded["content_sha256"]
+
+    matching = client.get(
+        url,
+        headers={**_headers(token), "Range": "bytes=1-3", "If-Range": uploaded["etag"]},
+    )
+    weak_or_stale = client.get(
+        url,
+        headers={**_headers(token), "Range": "bytes=1-3", "If-Range": f"W/{uploaded['etag']}"},
+    )
+    assert matching.status_code == 206
+    assert matching.content == content[1:4]
+    assert weak_or_stale.status_code == 200
+    assert weak_or_stale.content == content
+
+
+@pytest.mark.parametrize("header", ["bytes=", "bytes=abc", "bytes=1--2", "bytes=-0", "items=0-1", "bytes=0-1,3-4"])
+def test_invalid_or_multi_range_is_rejected(file_environment, header) -> None:
+    _, runtime, client = file_environment
+    token = _token(runtime, client)
+    file_id = _upload(client, token, "range.bin", b"abcdef").json()["file"]["file_id"]
+
+    response = client.get(
+        f"/api/files/{file_id}/content", headers={**_headers(token), "Range": header}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_range"
+    with runtime.store.connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM transfer_records WHERE direction = 'download'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("header", ["bytes=6-", "bytes=4-3"])
+def test_unsatisfiable_range_returns_416_without_a_transfer(file_environment, header) -> None:
+    _, runtime, client = file_environment
+    token = _token(runtime, client)
+    file_id = _upload(client, token, "range.bin", b"abcdef").json()["file"]["file_id"]
+
+    response = client.get(
+        f"/api/files/{file_id}/content", headers={**_headers(token), "Range": header}
+    )
+
+    assert response.status_code == 416
+    assert response.json()["error"]["code"] == "range_not_satisfiable"
+    assert response.headers["content-range"] == "bytes */6"
+    assert response.headers["accept-ranges"] == "bytes"
+    with runtime.store.connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM transfer_records WHERE direction = 'download'").fetchone()[0] == 0
+
+
+def test_empty_file_range_is_unsatisfiable_and_unauthorized_request_is_denied(file_environment) -> None:
+    _, runtime, client = file_environment
+    token = _token(runtime, client)
+    file_id = _upload(client, token, "empty.bin", b"").json()["file"]["file_id"]
+    url = f"/api/files/{file_id}/content"
+
+    empty_range = client.get(url, headers={**_headers(token), "Range": "bytes=0-0"})
+    unauthorized = client.get(url, headers={"Range": "bytes=0-0"})
+
+    assert empty_range.status_code == 416
+    assert empty_range.headers["content-range"] == "bytes */0"
+    assert unauthorized.status_code == 401
+
+
+def test_range_seeks_and_reads_only_selected_bytes_and_releases_download_slot(file_environment, monkeypatch) -> None:
+    _, runtime, client = file_environment
+    token = _token(runtime, client)
+    file_id = _upload(client, token, "range.bin", b"0123456789").json()["file"]["file_id"]
+
+    class TrackingSource(io.BytesIO):
+        def __init__(self, payload: bytes) -> None:
+            super().__init__(payload)
+            self.seek_positions: list[int] = []
+            self.read_sizes: list[int] = []
+
+        def seek(self, offset: int, whence: int = 0) -> int:
+            self.seek_positions.append(offset)
+            return super().seek(offset, whence)
+
+        def read(self, size: int = -1) -> bytes:
+            self.read_sizes.append(size)
+            return super().read(size)
+
+    source = TrackingSource(b"0123456789")
+    monkeypatch.setattr(runtime.files, "open_download", lambda _: source)
+    url = f"/api/files/{file_id}/content"
+    response = client.get(url, headers={**_headers(token), "Range": "bytes=3-5"})
+
+    assert response.status_code == 206
+    assert response.content == b"345"
+    assert source.seek_positions == [3]
+    assert source.read_sizes == [3]
+    assert runtime.download_slots.acquire(blocking=False)
+    runtime.download_slots.release()
+
+    assert runtime.download_slots.acquire(blocking=False)
+    try:
+        limited = client.get(url, headers={**_headers(token), "Range": "bytes=0-1"})
+    finally:
+        runtime.download_slots.release()
+    assert limited.status_code == 503
 
 
 def test_empty_unicode_and_duplicate_display_names_are_independent(file_environment) -> None:

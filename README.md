@@ -86,7 +86,7 @@ python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managed
 
 ### 文件 API（T003-B）
 
-服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载为完整 `200` 流，带 ETag 和安全下载名。暂不支持 Range、续传或上传幂等键。
+服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载带强 ETag、安全下载名和 `Accept-Ranges: bytes`，支持单一 `Range` 与强 ETag `If-Range`：可满足范围为 `206`，过期/不匹配版本回退完整 `200`，不可满足范围为 `416`。暂不支持多范围、上传续传或上传幂等键。
 
 ### 构建并使用 Web 页面（T004）
 
@@ -103,6 +103,27 @@ python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managed
 ### 显式局域网启动（Windows）
 
 默认命令仍只监听 `127.0.0.1`。要让同一家庭 Wi-Fi 的手机或平板访问，先在主机 PowerShell 中确认要使用的**具体私有 IPv4**（例如 `192.168.1.23`），构建页面并使用该地址启动：
+
+最方便的方式是运行仓库内的显式 LAN 启动脚本。它每次启动时自动构建 Web 页面、创建读写配对码，并在 Windows 移动热点存在时优先选择其标准地址 `192.168.137.1`；否则仅在能安全确定单一私有 IPv4 时自动选择。它不会绑定 `0.0.0.0`，也不会修改 Windows 防火墙、NAT 或路由器设置：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-lan.ps1
+```
+
+脚本会打印手机/平板应访问的 URL 和一次性配对码；保持该窗口打开，按 `Ctrl+C` 停止服务。多网卡且无法安全判断时，或想指定端口时，显式传入参数：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-lan.ps1 `
+  -ListenAddress 192.168.137.1 -Port 8000
+```
+
+只查看脚本选择的地址、不构建也不启动服务：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-lan.ps1 -PrintOnly
+```
+
+仍可使用下面的底层手动命令；此时 `pair create` 与 `serve` 必须使用相同的存储目录：
 
 ```powershell
 ipconfig
