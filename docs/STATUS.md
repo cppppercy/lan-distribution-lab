@@ -31,7 +31,7 @@
 任务：T004 — 局域网 Web 界面与多终端互通
 实际代码变化：新增 Vue 3 + TypeScript + Vite 的响应式单页界面；同源 Cookie 配对、文件列表、XHR 真实上传进度、原生浏览器下载发起、错误/加载/空状态与会话退出。FastAPI 仅在 web/dist 存在时于根路径提供构建后的静态资源，API 路由保持优先。serve 增加显式 --host，仅接受回环或私有 IPv4、拒绝 0.0.0.0/公网地址；默认 Origin 自动与监听 URL 匹配。CI 增加 npm ci、前端测试和生产构建。
 Codex 本地验证：PASS — npm audit（0 vulnerabilities）；npm run test（2 passed）；npm run build（Vue 类型检查和 Vite 生产构建通过）；python -m compileall -q src tests；python -m pytest（56 passed, 1 skipped, 1 warning）；短暂运行 127.0.0.1:8044 后 GET / 返回 Vue 根节点且 GET /api/health 返回 ok。现有文件 API 测试覆盖配对、上传/下载和 SHA-256 一致性；新增 Python 测试覆盖静态托管不遮蔽 API、LAN host/Origin 及拒绝不安全监听地址。
-GitHub Actions：NOT_RUN — 本地提交尚未推送时不得声称远端通过；推送后应检查 Windows/Python 3.12 的前端构建、前端测试与 pytest。
+GitHub Actions：PASS — PR #4 的功能提交 `9327cbf4a4d1851001a15f9f4c5048e250992787` 在 Windows / Python 3.12 两次触发均通过，分别用时 62 秒和 59 秒；工作流实际执行了 Node 24 的 npm ci、前端测试、Vite 构建及 Python pytest。
 真实设备验证：NOT_RUN — 尚未在手机、平板、家庭 Wi-Fi/热点执行浏览器配对、上传、下载保存确认和 SHA-256 对照；README 已提供人工测试步骤。
 已知限制：HTTP 无 TLS；浏览器下载只能报告“已发起”，不能证明文件已经在远端保存；会话刷新后服务器无读取 scope 的接口，页面显示“已授权”并让服务器继续强制权限；Range、续传、UDP、P2P 和调度不在本任务范围。
 ```
