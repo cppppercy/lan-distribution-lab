@@ -2,7 +2,7 @@
 
 面向局域网的可靠文件传输与多终端协同分发系统（课程项目）。
 
-> 项目状态：T003-A 的本机配对、会话授权与存储基础已在自动化测试中验证；尚未实现文件上传/下载、续传、设备发现、调度或页面 UI。默认服务仍只监听本机。
+> 项目状态：T003-A/B 的认证、会话、受控文件上传/下载与任务摘要已在本地自动化测试中验证；Range/续传、设备发现、调度、页面 UI 和真实设备验证尚未实现。默认服务仍只监听本机。
 
 ## 项目目标
 
@@ -84,7 +84,11 @@ python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managed
 
 当前 HTTP 未启用 TLS，Cookie 的 `Secure` 属性必须为假才能在 HTTP 工作。这些控制能拒绝未持有凭据的请求、缩短凭据有效期并抵御常见 CSRF；**不能**防止同一局域网的窃听或中间人。不要把配对码或 CLI token 发送给不可信对象，也不要将本机服务暴露到公网。
 
-`managed_root/objects` 和 `managed_root/staging` 已创建为未来受控文件对象目录；T003-A 没有文件业务 API，也不会读写用户文件。
+### 文件 API（T003-B）
+
+服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载为完整 `200` 流，带 ETag 和安全下载名。没有浏览器页面或正式 Python CLI 文件客户端，暂不支持 Range、续传或上传幂等键。
+
+默认资源限制为单文件 64 MiB、请求 64 MiB + 128 KiB、受控对象总额 1 GiB、保留 64 MiB 磁盘空间、同时上传 2/下载 8。超限、配额不足或 `ENOSPC` 会失败且不发布部分文件。`managed_root/objects` 和 `managed_root/staging` 仅由服务端生成 UUID 名称；客户端文件名不会成为磁盘路径。
 
 ### 运行自动化测试
 

@@ -12,7 +12,7 @@
 | T002 | DONE | 文件 API 设计与威胁模型；接口契约、权限与路径安全测试设计 | G1 设计前置 | T001 |
 | T003 | IN_PROGRESS | 后端受控共享文件、列表、下载、上传与校验；仅在 T003-A/B 均完成后可 DONE | G1 | T002 |
 | T003-A | DONE | 本机配对码、会话授权、SQLite 状态和受控存储目录基础 | G1-A | T002 |
-| T003-B | TODO | 受控文件上传/下载、校验、元数据与传输记录 | G1-B | T003-A |
+| T003-B | DONE | 受控文件上传/下载、校验、元数据与传输记录 | G1-B | T003-A |
 | T004 | TODO | Vue 移动端基础界面及 PC↔移动设备真实互通 | G1 | T003 |
 | T005 | TODO | HTTP Range/版本保护/边界测试 | G2 | T003 |
 | T006 | TODO | Python CLI 断点续传、失败恢复、完整性验证 | G2 | T005 |
@@ -71,11 +71,13 @@
 
 ### T003-B（受控文件上传、下载、校验及任务记录）
 
-**目标**：基于 T003-A 已实现会话依赖与隔离目录，落实文件对象的流式上传/下载、SHA-256、配额/ENOSPC/中断清理、元数据与传输记录，并实现对应 P0 测试。
+**完成内容（2026-11-09）**：基于 T003-A 会话依赖，实现有界流式 multipart 上传、staging→UUID objects 发布、SHA-256、SQLite 文件元数据和传输摘要、列表/元数据/下载 API、配额/剩余磁盘/槽位限制、`ENOSPC` 清理与 Cookie Origin 检查。下载只提供完整 200 流。
 
-**明确不做**：HTTP Range/If-Range（T005）、CLI 续传（T006）、Vue、UDP、调度与真实设备性能实验。
+**验收证据**：本地 pytest 覆盖正常上传下载/哈希、0 B、Unicode/重名、无授权/read 权限、撤销、恶意展示名、请求/文件/总配额、故障注入、上传清理、会话任务隔离、Origin、槽位和流式超限读取。最终命令和结果见 `docs/STATUS.md`。
 
-**开始条件**：T003-A 的 PR 被审查，且后续实现保持 `managed_root` 路径边界、`read`/`read_write` 依赖、默认 localhost 监听和 HTTP 风险声明。
+**明确不做**：HTTP Range/If-Range（T005）、CLI 续传（T006）、上传幂等键、Vue、UDP、调度与真实设备性能实验。
+
+**未验证**：真实设备/真实 LAN、Windows ACL、可创建符号链接/reparse-point 的 Windows 竞态、HTTPS；T003 整体须经过最终代码审核后才能标记 DONE。
 
 ### T003 及后续任务共同模板
 

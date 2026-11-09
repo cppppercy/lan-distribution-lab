@@ -1,65 +1,59 @@
-# 当前架构（T001、T002 设计、T003-A 实现）
+# 当前架构（T003-B 实现）
 
-**状态**：T003-A 已实现本机配对码、会话授权、SQLite 状态和受控目录基础，并通过本地自动化测试。文件列表、上传、下载、Range、传输记录、前端与设备发现均未实现；`objects/`、`staging/` 目前不会承载文件业务。
+**状态**：T003-A 的本机配对/会话/SQLite 基础与 T003-B 的文件传输后端均已实现并通过本地自动化测试。T003 整体仍为 `IN_PROGRESS`，等待最终代码审核；Range、CLI 续传、Web UI、UDP 与真实设备实验未实现。
 
-## 运行组成与安全边界
+## 组件与数据流
 
 ```mermaid
 flowchart LR
-    operator["可信 Windows 操作者"] --> cli["pair create（仅本机 CLI）"]
-    cli --> state["state.sqlite3 + server-secret.bin"]
-    client["浏览器或 Python CLI"] --> pair["POST /api/pairings"]
-    pair --> auth["配对与会话服务"]
+    operator["Windows 操作者"] --> cli["pair create（仅本机 CLI）"]
+    cli --> state["SQLite + HMAC 服务器秘密"]
+    browser["浏览器 Cookie"] --> api["FastAPI /api"]
+    client["CLI Bearer"] --> api
+    api --> auth["认证、scope、Origin"]
+    api --> multipart["有界 multipart 流解析"]
+    multipart --> staging["managed_root/staging"]
+    staging --> objects["objects/<server UUID>"]
     auth --> state
-    client --> revoke["DELETE /api/sessions/current"]
-    revoke --> auth
-    server["Uvicorn + FastAPI\n127.0.0.1:8000"] --> pair
-    server --> revoke
-    store["managed_root\nobjects/ + staging/"]
+    objects --> download["流式完整下载"]
+    api --> transfers["SQLite transfer_records"]
 ```
 
-`python -m lan_distribution_lab` 仍等同于 `serve`，固定绑定 `127.0.0.1:8000`。应用不修改 Windows 防火墙、不默认监听局域网或公网。T003-A 的浏览器 Origin 默认值为 `http://127.0.0.1:8000`；需要显式 `--origin` 才能改变，且这不改变监听地址。
+默认入口 `python -m lan_distribution_lab` 仍固定监听 `127.0.0.1:8000`，不修改防火墙、不自动公开 LAN/公网。`pair create` 与 `serve` 必须使用同一组分离的绝对 `data_dir`、`managed_root`。
 
 ## 模块边界
 
-| 路径 | 职责 | 状态 |
-| --- | --- | --- |
-| `app.py` | HTTP 健康、配对、撤销路由；请求大小/Origin 与统一错误适配 | 已实现 |
-| `__main__.py` | 标准库 argparse；`serve` 与仅本机的 `pair create` | 已实现 |
-| `config.py` | 本地状态目录、受控根、TTL、限速和 Origin 配置 | 已实现 |
-| `storage.py` | SQLite 初始化、HMAC 服务器秘密、事务、`objects`/`staging` 布局 | 已实现 |
-| `auth.py` | 配对码兑换、令牌摘要认证、scope、撤销和 FastAPI 依赖 | 已实现 |
-| `models.py` / `errors.py` / `runtime.py` | 小型领域模型、统一安全错误、惰性运行时 | 已实现 |
-| `tests/test_auth_storage.py` | T003-A 临时目录、可控时间、并发与 HTTP 安全测试 | 已实现 |
-| 文件对象/传输服务、文件 HTTP API、Range、CLI 续传、Web UI、UDP | 后续任务 | 未实现 |
+| 模块 | 真实职责 |
+| --- | --- |
+| `app.py` | HTTP 路由、认证依赖、Origin/内容类型检查、响应头和受控槽位 |
+| `body.py` | 对配对 JSON 的有界 `Request.stream()` 累计读取 |
+| `multipart.py` | 单文件 multipart 的有界流解析；不调用框架表单缓存 |
+| `auth.py` | 配对码、令牌摘要、scope、撤销与流式分块时会话复核 |
+| `storage.py` | SQLite schema、事务、状态目录和服务器秘密 |
+| `files.py` | staging 写入、SHA-256、配额/磁盘检查、原子硬链接发布、对象读取和任务记录 |
+| `runtime.py` | 组合服务及上传/下载 `BoundedSemaphore` 槽位 |
 
-## 已实现接口
+## 已实现 API 与语义
 
-- `GET /api/health`：公开 liveness；严格返回 `{"status":"ok","service":"lan-distribution-lab"}`。
-- `POST /api/pairings`：4 KiB JSON 上限；短时一次性六位码原子兑换会话。CLI 响应一次性含 Bearer token；浏览器响应不含 token，并设置 HttpOnly、SameSite=Strict、`Path=/api` Cookie。浏览器请求的 Origin 必须精确匹配配置。
-- `DELETE /api/sessions/current`：Bearer 或 Cookie 认证后撤销会话。Cookie 认证还需精确 Origin；成功返回 204 并清理 Cookie。撤销/过期的凭据在之后的认证中返回 401。
+- `GET /api/health`：公开 liveness。
+- `POST /api/pairings`：4 KiB 有界 JSON 读取；浏览器 Cookie 或 CLI Bearer 会话。
+- `DELETE /api/sessions/current`：首次有效撤销为 204；已撤销、过期或无效凭据再次为 401；Cookie 状态变更检查 Origin 并清理 Cookie。
+- `GET /api/files`、`GET /api/files/{file_id}`：`read` 会话后才查询；无效 UUID 为 422，不存在对象为 404，不暴露磁盘路径。
+- `POST /api/uploads`：`read_write` 会话；Cookie 请求检查 Origin；multipart 总请求、文件、总配额、可用磁盘和上传槽位均有限制。文件写入 staging 时分块计算 SHA-256，随后以服务端 UUID 硬链接发布到 objects，并写入 SQLite。
+- `GET /api/files/{file_id}/content`：`read` 会话下的完整 200 流，带 `Content-Length`、强 ETag、安全 `Content-Disposition` 与 `X-Transfer-Id`；不支持 Range。
+- `GET /api/transfers/{transfer_id}`：仅任务所属会话可见。`completed` 仅表示服务端读完/写完本地字节，**不表示远端客户端已经保存成功**。
 
-错误均为 `{"error":{"code":"...","message":"..."}}`，且不回显配对码、访问令牌或本地绝对路径。
+## 安全与资源边界
 
-## 持久化与目录布局
+默认值：单文件 64 MiB、multipart 总请求 64 MiB + 128 KiB、受控对象总额 1 GiB、保留 64 MiB 空闲空间、同时上传 2、下载 8。超过限制返回统一安全错误并清理 staging；`ENOSPC`/配额不足返回 507。上传和下载每个分块复核会话是否撤销或过期。
 
-操作者配置的 `data_dir` 与 `managed_root` 必须是不同的绝对路径，且不能相互嵌套。默认状态目录为 Windows `%LOCALAPPDATA%\LANDistributionLab\state`；`managed_root` 默认为它的同级 `managed` 目录。`--data-dir`/`--managed-root` 或相应环境变量可覆盖该默认值。
+客户端展示名从不决定对象路径，拒绝路径分隔符、Windows 保留字符、控制字符、`.` 与 `..`。对象/目录操作以服务端 UUID 并做普通文件、符号链接/reparse-point 检查；本机受限环境未能创建符号链接，因此真实 Windows 链接/reparse-point 竞态仍是未验证风险。
 
-```text
-data_dir/
-  state.sqlite3             # pairing_codes、sessions、pairing_failures、file_metadata 基础表
-  server-secret.bin         # 32 字节本机 HMAC 秘密，不提交 Git
-managed_root/
-  objects/                  # 已创建；T003-A 不写入文件
-  staging/                  # 已创建；T003-A 不写入文件
-```
+## 明确未实现
 
-SQLite 的 `BEGIN IMMEDIATE` 用于配对码兑换，确保并发请求只有一个能消耗同一代码。配对码和访问令牌的秘密部分均只以 HMAC-SHA-256 摘要落库；会话记录保存 UUID、scope、创建/绝对过期/撤销时间和可选设备标签。`file_metadata` 是后续外键/数据迁移的空基础，当前没有文件业务操作。
+- `Range` / `If-Range` / 206（T005）
+- 上传 `Idempotency-Key` 与上传断点续传
+- Python CLI 续传、Vue 页面、UDP 发现、调度与公网部署
+- HTTPS、真实手机/平板、真实 LAN 性能/可靠性实验
 
-## 已知限制和下一步
-
-- HTTP 没有 TLS：Cookie/Bearer/码可能被同网段窃听；本实现不宣称链路机密性或抗中间人。
-- 未做真实手机、平板、LAN、Windows ACL 或 reparse-point 测试。
-- T003-B 应只在此基础上实现受控上传、下载、SHA-256、资源限额、文件元数据/任务记录及相应测试；不得改变 T003-A 的本地默认监听和会话边界。
-
-完整 API 设计见 [API_CONTRACT.md](API_CONTRACT.md)，威胁边界见 [THREAT_MODEL.md](THREAT_MODEL.md)，测试分期见 [TEST_PLAN.md](TEST_PLAN.md)。
+HTTP 没有 TLS：短时令牌、Cookie 和文件内容仍可能被同网段窃听或篡改。完整契约见 [API_CONTRACT.md](API_CONTRACT.md)，风险见 [THREAT_MODEL.md](THREAT_MODEL.md)。

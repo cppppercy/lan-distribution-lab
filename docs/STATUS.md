@@ -1,7 +1,7 @@
 # 当前项目状态
 
 **更新日期**：2026-11-09
-**整体状态**：T003-A 的本机配对、会话授权和存储基础已实现并在本地自动化测试中通过；T003-B 的文件业务尚未开始，T003 整体仍为 IN_PROGRESS。
+**整体状态**：T003-A/B 的认证、受控文件上传/下载、SQLite 元数据和传输摘要已实现并完成本地自动化验证；T003 整体仍为 IN_PROGRESS，等待最终代码审核。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -10,7 +10,7 @@
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
-- 文件传输、设备发现、续传、多客户端分发：**NOT_IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；设备发现、续传、多客户端分发：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
@@ -18,9 +18,21 @@
 ## 当前任务
 - **T001 — DONE**：最小工程初始化、健康接口、自动化测试、CI 配置和启动说明已按任务边界完成。完整证据见下方记录与 `docs/TASKS.md`。
 - **T002 — DONE**：API 契约、安全威胁模型和测试方案已完成，且未越界实现文件业务。详见 `docs/API_CONTRACT.md`、`docs/THREAT_MODEL.md`、`docs/TEST_PLAN.md`。
-- **T003-A — DONE**：配对码、会话、撤销、scope 与存储基础实现完成；T003-B 前不提供文件接口。
-- **T003 — IN_PROGRESS**：必须在 T003-A 与 T003-B 都完成并经审核后才能标记 DONE。
-- 下一关卡：T003-B 可在审查 T003-A 后开始；G1 的文件收发、真实设备和真实 LAN 证据仍未获得。
+- **T003-A — DONE**：配对码、会话、撤销、scope 与存储基础实现完成并完成有界请求读取补修。
+- **T003-B — DONE（实现与本地测试）**：受控上传/下载、SHA-256、SQLite 文件/任务摘要与安全测试已完成。
+- **T003 — IN_PROGRESS**：T003-A/B 均已实现，但整体必须经最终代码审核后才能标记 DONE。
+- 下一关卡：审核通过后可进入 T004 或 T005；真实设备和真实 LAN 证据仍未获得。
+
+## T003-B 验证记录（2026-11-09）
+
+```text
+时间：2026-11-09
+任务：T003-B — 受控文件上传、下载、校验及任务记录
+实际代码变化：有界 multipart 流解析；staging→服务器 UUID objects 发布；SHA-256、SQLite file_metadata/transfer_records、文件列表/元数据/完整下载、受控任务查询、请求/文件/配额/磁盘/并发限制与清理。
+测试：PASS — `python -m compileall -q src tests`；`python -m pytest`（Python 3.13.7：37 passed, 1 skipped, 1 warning in 2.37s）；`python -m pip check`（No broken requirements found）。pytest 覆盖文件上传下载、完整性、0 B、Unicode/重名、权限/撤销、路径/展示名、配额、ENOSPC 注入、上传清理、任务隐私、Cookie Origin、槽位和流式超限读取。
+真实设备证据：NOT_RUN；未测试手机、平板、真实 Wi-Fi、热点或公网。
+已知限制：不支持 Range、If-Range、上传幂等键或续传；HTTP 无 TLS；Windows 受限测试环境无法创建符号链接，reparse-point 竞态未验证。
+```
 
 ## T003-A 验证记录（2026-11-09）
 

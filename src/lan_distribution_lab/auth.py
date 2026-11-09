@@ -179,6 +179,16 @@ class AuthService:
                 (now, session_id),
             )
 
+    def ensure_session_active(self, session_id: str) -> None:
+        """Recheck a previously authenticated session at streaming chunk boundaries."""
+        now = self.store.now_epoch()
+        with self.store.connection() as connection:
+            row = connection.execute(
+                "SELECT expires_at, revoked_at FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        if row is None or row["revoked_at"] is not None or row["expires_at"] <= now:
+            raise ApiError(401, "session_expired", "The session is no longer valid.")
+
     def require_scope(self, token: str, required_scope: Scope) -> Session:
         session = self.authenticate_token(token)
         if required_scope == "read_write" and session.scope != "read_write":

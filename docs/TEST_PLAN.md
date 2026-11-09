@@ -1,6 +1,6 @@
 # 测试计划与需求追踪（T002 设计）
 
-**状态**：测试方案已设计；除 T001 健康接口回归外，文件、授权、Range、CLI 和真实设备测试均未实现/未运行。每个用例只有在对应阶段真正执行并保留证据后才能标为 PASS。
+**状态**：T003-A/B 已实施并运行认证与文件核心自动化测试；Range、CLI、真实设备和网络实验仍未运行。每个用例只有在对应阶段真正执行并保留证据后才能标为 PASS。
 
 ## 1. 执行原则
 
@@ -71,5 +71,5 @@
 | T001 健康接口回归 | PASS（T003-A） | Python 3.13.7，`20 passed, 1 warning in 1.23s` 中保留 2 项健康断言 |
 | T003-A 配对/会话/Origin/存储基础 | PASS（本地自动化） | `tests/test_auth_storage.py`：有效/重复/过期/并发兑换、限速、Cookie/Bearer、scope、撤销、Origin、日志/摘要、重启与目录隔离 |
 | T003-A GitHub Actions | PASS（PR #3） | Windows / Python 3.12 运行 pytest 成功；分支推送 39 秒、PR 检查 40 秒 |
-| T003-B 文件、路径、配额、清理 | NOT_RUN | 本子任务严格不实现文件上传/下载；TP-010、TP-020--041 的文件业务部分留给 T003-B |
+| T003-B 文件、路径、配额、清理 | PASS（本地自动化） | `tests/test_file_api.py`：上传/下载 SHA-256、0 B、Unicode/重名、权限、展示名、文件/请求/总配额、ENOSPC、staging 清理、任务隐私、Origin、槽位和有界 multipart 流 |
 | Range、CLI 续传、真实设备/真实 LAN | NOT_RUN | 分别留给 T005、T006、T004/G1；未把本机测试描述为真实设备验证 |

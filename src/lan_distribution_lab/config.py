@@ -25,6 +25,13 @@ class Settings:
     max_pair_failures: int = 5
     pair_failure_window_seconds: int = 10 * 60
     pair_lockout_seconds: int = 10 * 60
+    max_upload_bytes: int = 64 * 1024 * 1024
+    max_request_bytes: int = 64 * 1024 * 1024 + 128 * 1024
+    max_managed_bytes: int = 1024 * 1024 * 1024
+    min_free_bytes: int = 64 * 1024 * 1024
+    max_active_uploads: int = 2
+    max_active_downloads: int = 8
+    transfer_retention_seconds: int = 7 * 24 * 60 * 60
 
     @classmethod
     def from_environment(cls, *, origin: str = "http://127.0.0.1:8000") -> "Settings":

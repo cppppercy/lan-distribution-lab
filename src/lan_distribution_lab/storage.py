@@ -99,6 +99,21 @@ class LocalStateStore:
                     created_at INTEGER NOT NULL,
                     publisher_session_id TEXT REFERENCES sessions(session_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS transfer_records (
+                    transfer_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES sessions(session_id),
+                    file_id TEXT,
+                    direction TEXT NOT NULL CHECK (direction IN ('upload', 'download')),
+                    state TEXT NOT NULL CHECK (state IN ('started', 'completed', 'failed', 'cancelled')),
+                    bytes_transferred INTEGER NOT NULL,
+                    size_bytes INTEGER,
+                    error_code TEXT,
+                    started_at INTEGER NOT NULL,
+                    finished_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS transfer_records_session_idx
+                    ON transfer_records(session_id, started_at DESC);
                 """
             )
 

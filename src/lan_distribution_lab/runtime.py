@@ -7,6 +7,7 @@ import threading
 from .auth import AuthService
 from .config import Settings
 from .storage import LocalStateStore
+from .files import FileService
 
 
 class Runtime:
@@ -14,6 +15,9 @@ class Runtime:
         self.settings = settings
         self.store = store or LocalStateStore(settings)
         self.auth = AuthService(self.store)
+        self.files = FileService(self.store)
+        self.upload_slots = threading.BoundedSemaphore(settings.max_active_uploads)
+        self.download_slots = threading.BoundedSemaphore(settings.max_active_downloads)
 
 
 class RuntimeProvider:
