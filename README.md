@@ -71,8 +71,8 @@ ok     lan-distribution-lab
 配对码只能由 Windows 主机上的命令行生成，**没有**对应的 LAN 管理 HTTP 接口。为避免“生成码的状态库”和服务端不一致，`pair create` 与 `serve` 必须使用同一组绝对 `--data-dir` 和 `--managed-root`；两个目录必须分离。
 
 ```powershell
-$dataDir = "C:\LANDistributionLab\state"
-$managedRoot = "C:\LANDistributionLab\managed"
+$dataDir = Join-Path $env:LOCALAPPDATA "LANDistributionLab\state"
+$managedRoot = Join-Path $env:LOCALAPPDATA "LANDistributionLab\managed"
 
 python -m lan_distribution_lab pair create --scope read --data-dir $dataDir --managed-root $managedRoot
 python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managedRoot

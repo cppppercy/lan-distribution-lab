@@ -15,6 +15,7 @@ from .auth import (
     get_runtime,
     require_allowed_origin,
 )
+from .body import read_limited_body
 from .config import Settings
 from .errors import ApiError, error_response
 from .runtime import Runtime, RuntimeProvider
@@ -52,13 +53,7 @@ def create_app(settings: Settings | None = None, *, runtime: Runtime | None = No
     async def create_pairing(request: Request) -> Response:
         if not request.headers.get("content-type", "").lower().startswith("application/json"):
             raise ApiError(415, "unsupported_media_type", "Pairing requests must use application/json.")
-        content_length = request.headers.get("content-length")
-        if content_length is not None and _content_length_exceeds_limit(content_length):
-            raise ApiError(413, "payload_too_large", "Pairing request is too large.")
-
-        body = await request.body()
-        if len(body) > PAIRING_BODY_MAX_BYTES:
-            raise ApiError(413, "payload_too_large", "Pairing request is too large.")
+        body = await read_limited_body(request, PAIRING_BODY_MAX_BYTES)
         try:
             pairing_request = PairingRequest.model_validate(json.loads(body))
         except (json.JSONDecodeError, ValidationError):
@@ -119,13 +114,4 @@ def create_app(settings: Settings | None = None, *, runtime: Runtime | None = No
         return response
 
     return application
-
-
-def _content_length_exceeds_limit(value: str) -> bool:
-    try:
-        return int(value) > PAIRING_BODY_MAX_BYTES
-    except ValueError:
-        return True
-
-
 app = create_app()

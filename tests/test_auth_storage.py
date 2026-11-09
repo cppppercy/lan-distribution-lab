@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import sqlite3
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from lan_distribution_lab.__main__ import main
 from lan_distribution_lab.app import create_app
 from lan_distribution_lab.auth import COOKIE_NAME
+from lan_distribution_lab.body import collect_limited_chunks, validate_content_length
 from lan_distribution_lab.config import Settings
 from lan_distribution_lab.errors import ApiError
 from lan_distribution_lab.runtime import Runtime
@@ -289,6 +291,43 @@ def test_pairing_request_rejects_unsupported_input(auth_environment) -> None:
 
     assert unsupported.status_code == 415
     assert malformed.status_code == 422
+
+
+def test_pairing_body_limit_accepts_exact_boundary_and_rejects_excess(auth_environment) -> None:
+    _, _, _, client = auth_environment
+    prefix = b'{"pairing_code":"123456","client_kind":"cli","device_label":"'
+    exact_body = prefix + (b"x" * (4096 - len(prefix) - 2)) + b'"}'
+
+    exact = client.post("/api/pairings", content=exact_body, headers={"Content-Type": "application/json"})
+    oversized = client.post(
+        "/api/pairings",
+        content=exact_body + b" ",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert len(exact_body) == 4096
+    assert exact.status_code == 422  # body reached validation; it was not rejected by the size guard.
+    assert oversized.status_code == 413
+
+
+def test_limited_body_reader_handles_missing_and_invalid_content_length_without_unbounded_buffering() -> None:
+    validate_content_length(None, 4)
+    with pytest.raises(ApiError, match="invalid_request") as invalid:
+        validate_content_length("not-a-number", 4)
+    assert invalid.value.status_code == 400
+
+    emitted: list[int] = []
+
+    async def chunks():
+        emitted.append(4)
+        yield b"abcd"
+        emitted.append(1024 * 1024)
+        yield b"z" * (1024 * 1024)
+
+    with pytest.raises(ApiError, match="payload_too_large") as exceeded:
+        asyncio.run(collect_limited_chunks(chunks(), 4))
+    assert exceeded.value.status_code == 413
+    assert emitted == [4, 1024 * 1024]
 
 
 def test_database_contains_no_plaintext_access_token(auth_environment) -> None:
