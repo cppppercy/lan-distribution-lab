@@ -86,7 +86,7 @@ python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managed
 
 ### 文件 API（T003-B）
 
-服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载为完整 `200` 流，带 ETag 和安全下载名。暂不支持 Range、续传或上传幂等键。
+服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载带强 ETag、安全下载名和 `Accept-Ranges: bytes`，支持单一 `Range` 与强 ETag `If-Range`：可满足范围为 `206`，过期/不匹配版本回退完整 `200`，不可满足范围为 `416`。暂不支持多范围、上传续传或上传幂等键。
 
 ### 构建并使用 Web 页面（T004）
 

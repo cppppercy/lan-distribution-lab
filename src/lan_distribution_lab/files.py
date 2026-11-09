@@ -197,9 +197,12 @@ class FileService:
             raise ApiError(404, "resource_not_found", "The requested resource does not exist.")
         return _file_from_row(row)
 
-    def start_download(self, session_id: str, record: FileRecord) -> TransferRecord:
+    def start_download(self, session_id: str, record: FileRecord, *, size_bytes: int | None = None) -> TransferRecord:
         self._safe_object_path(record)
         self._cleanup_expired_state()
+        planned_bytes = record.size_bytes if size_bytes is None else size_bytes
+        if not 0 <= planned_bytes <= record.size_bytes:
+            raise ValueError("download size must be within the published object size")
         transfer_id = str(uuid.uuid4())
         now = self.store.now_epoch()
         with self.store.transaction() as connection:
@@ -210,7 +213,7 @@ class FileService:
                     size_bytes, error_code, started_at, finished_at
                 ) VALUES (?, ?, ?, 'download', 'started', 0, ?, NULL, ?, NULL)
                 """,
-                (transfer_id, session_id, record.file_id, record.size_bytes, now),
+                (transfer_id, session_id, record.file_id, planned_bytes, now),
             )
         return TransferRecord(
             transfer_id=transfer_id,
@@ -219,7 +222,7 @@ class FileService:
             direction="download",
             state="started",
             bytes_transferred=0,
-            size_bytes=record.size_bytes,
+            size_bytes=planned_bytes,
             error_code=None,
             started_at=_to_datetime(now),
             finished_at=None,

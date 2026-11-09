@@ -1,7 +1,7 @@
 # 当前项目状态
 
 **更新日期**：2026-11-09
-**整体状态**：T003 已合并至 main；T004 的同源 Vue Web、显式 LAN 启动、Windows 自动选址启动脚本和本地构建/自动化验证已完成，真实手机/平板互通仍为 NOT_RUN。
+**整体状态**：T003 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T005 的单 Range/If-Range 后端实现和本地自动化测试已完成，等待 PR/CI 审查。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -21,8 +21,9 @@
 - **T003-A — DONE**：配对码、会话、撤销、scope 与存储基础实现完成并完成有界请求读取补修。
 - **T003-B — DONE（实现与本地测试）**：受控上传/下载、SHA-256、SQLite 文件/任务摘要与安全测试已完成。
 - **T003 — DONE**：T003-A/B 及最终验收补修已合并至 main。
-- **T004 — IN_PROGRESS**：Vue Web、同源静态托管、Cookie 集成、显式私有 IPv4 LAN 启动及自动选址启动脚本已实现；等待真实手机/平板互通记录。
-- 下一关卡：完成 T004 的人工移动端记录后可进入 T005；真实设备和真实 LAN 证据仍未获得。
+- **T004 — IN_PROGRESS**：Vue Web、同源静态托管、Cookie 集成、显式私有 IPv4 LAN 启动及自动选址启动脚本已实现；手机热点基础互传已验证，平板、SHA-256 对照和断线等 G1 人工项目待补验。
+- **T005 — IN_PROGRESS**：单 Range、强 ETag If-Range、范围任务语义和自动化边界测试已实现；等待 PR/CI 审查。
+- 下一关卡：T005 审查通过后可进入 T006；T004 的剩余真实设备项目仍须如实补验。
 
 ## T004 验证记录（2026-11-09）
 
@@ -32,8 +33,18 @@
 实际代码变化：新增 Vue 3 + TypeScript + Vite 的响应式单页界面；同源 Cookie 配对、文件列表、XHR 真实上传进度、原生浏览器下载发起、错误/加载/空状态与会话退出。FastAPI 仅在 web/dist 存在时于根路径提供构建后的静态资源，API 路由保持优先。serve 增加显式 --host，仅接受回环或私有 IPv4、拒绝 0.0.0.0/公网地址；默认 Origin 自动与监听 URL 匹配。Windows `scripts/start-lan.ps1` 在用户显式运行后优先选择移动热点 `192.168.137.1`，否则只在地址无歧义时选择私有 IPv4；它构建 Web、创建一次性配对码并调用同一受限 serve 命令，不修改防火墙、NAT 或端口映射。CI 增加 npm ci、前端测试和生产构建。
 Codex 本地验证：PASS — npm audit（0 vulnerabilities）；npm run test（2 passed）；npm run build（Vue 类型检查和 Vite 生产构建通过）；python -m compileall -q src tests；python -m pytest（56 passed, 1 skipped, 1 warning）；短暂运行 127.0.0.1:8044 后 GET / 返回 Vue 根节点且 GET /api/health 返回 ok。新增脚本以 `-PrintOnly` 实测识别当前 Windows 移动热点 `192.168.137.1`；以 8004 完整运行时实测完成构建、配对码创建、该地址监听及 GET /api/health=200，之后仅停止该临时 8004 进程。现有文件 API 测试覆盖配对、上传/下载和 SHA-256 一致性；新增 Python 测试覆盖静态托管不遮蔽 API、LAN host/Origin 及拒绝不安全监听地址。
 GitHub Actions：PASS — PR #4 的功能提交 `9327cbf4a4d1851001a15f9f4c5048e250992787` 在 Windows / Python 3.12 两次触发均通过，分别用时 62 秒和 59 秒；工作流实际执行了 Node 24 的 npm ci、前端测试、Vite 构建及 Python pytest。
-真实设备验证：NOT_RUN — 尚未在手机、平板、家庭 Wi-Fi/热点执行浏览器配对、上传、下载保存确认和 SHA-256 对照；README 已提供人工测试步骤。
+真实设备验证：手机热点场景已验证（用户提供）— 2026-11-09，Windows 移动热点，服务 `192.168.137.1:8003`；手机成功访问 Vue 页面，Windows 电脑与手机分别使用独立 `read_write` 配对码，并确认双向文件收发成功。校园 Wi-Fi 曾超时，原因未确认。平板、文件大小、设备/浏览器信息、SHA-256 对照和断线实验：NOT_RUN。
 已知限制：HTTP 无 TLS；浏览器下载只能报告“已发起”，不能证明文件已经在远端保存；会话刷新后服务器无读取 scope 的接口，页面显示“已授权”并让服务器继续强制权限；Range、续传、UDP、P2P 和调度不在本任务范围。
+```
+
+## T005 验证记录（2026-11-09）
+
+```text
+任务：T005 — HTTP Range 与文件版本保护
+实际代码变化：下载端点保留无 Range 的完整 200，并实现单一 bytes=start-end、start-、-suffixLength 的 206 流；响应带 Accept-Ranges、Content-Range、范围 Content-Length 和强 ETag。多范围或非法语法返回 400 invalid_range；不可满足范围返回 416 和 bytes */total。If-Range 仅精确强 ETag 匹配时返回 206；弱/日期/不匹配值回退完整 200。流通过 seek 和剩余字节计数发送，范围任务的 size_bytes/bytes_transferred 是本次响应范围，不是完整对象。
+Codex 本地验证：PASS — python -m compileall -q src tests；python -m pytest（Python 3.13.7：67 passed, 1 skipped, 1 warning）；python -m pip check（No broken requirements found）；npm --prefix web run test（2 passed）；npm --prefix web run build（通过）。新增范围测试将多个 206 数据段顺序拼接后验证 SHA-256 与原对象一致，并覆盖空文件、非法/多范围、416、If-Range、未授权、流式 read 上界与下载槽位释放。
+GitHub Actions：NOT_RUN — 本地提交和推送后再以远端实际 Checks 为准。
+非目标/限制：未实现多范围 MIME、Python CLI 断点续传、上传续传、UDP、P2P 或调度；Range 的 completed 仅说明服务器读完并发送了所选响应范围，不能证明远端客户端保存完成。Windows 测试环境仍不允许创建符号链接，相关 reparse-point 测试跳过。
 ```
 
 ## T003-B 验证记录（2026-11-09）
