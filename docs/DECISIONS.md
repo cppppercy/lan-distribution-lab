@@ -57,3 +57,11 @@
 - **理由**：不新增 multipart/数据库依赖，大小拒绝发生在应用接收流期间而非完整表单缓存之后；UUID 对象名与 staging→发布过程避免客户端路径和同名覆盖；硬链接在同一受控卷不覆盖已有对象。
 - **替代方案**：拒绝 `await request.form()`/`UploadFile` 作为本任务的大小安全边界；拒绝整文件内存读取、客户端路径落盘和可覆盖的 `os.replace` 发布。保留更成熟 multipart 库作为未来独立评估项。
 - **限制**：当前只支持一个文件与可选展示名，不实现上传幂等键、Range 或续传。Windows 受限测试环境不能创建符号链接，虽有 lstat/reparse-point 拒绝代码，仍需在可创建链接的 Windows 环境复核竞态。HTTP 不提供机密性。
+
+## ADR-010（ACCEPTED，2026-11-09）：无秘密状态文件的 CLI 单对象续传
+- **背景**：T005 已能为不可变对象提供强 ETag、单 Range 和 If-Range；CLI 需要在进程中断后恢复，但不能把 Bearer token、用户命令或不可信本地字节直接当成可追加状态。
+- **决定**：T006 用 Python 标准库 `urllib`，不新增运行时依赖。下载前读取受保护元数据；在目标同目录维护固定的 `.part` 和 `.part.json`。JSON 仅含规范化 server、file_id、强 ETag、大小、SHA-256 与已落盘字节，逐块在数据 `fsync` 后原子更新，绝不含 token 或任意路径。恢复请求为 `Range: bytes=<offset>-` + `If-Range: <ETag>`；只接受精确的 206/Content-Range/Content-Length/ETag。完成后重新流式 SHA-256，并以不覆盖已有目标的同目录硬链接发布。
+- **凭据决定**：CLI 不提供 `--token` 参数；默认 `getpass` 无回显输入。`--pair` 以无回显的一次性配对码换取 token，仅保留在本进程内存；`--token-stdin` 仅为调用方已能安全管理的管道保留。
+- **失败策略**：续传得到完整 200、416 或元数据/本地状态版本不一致时，将旧工件重命名为随机 `.stale-*` 后至多重新开始一次；错误 206 或最终 hash 失败不追加/不发布。连接错误采用默认两次、可配置但有限的重试；磁盘失败保留可诊断工件且不发布目标。
+- **替代方案**：拒绝保存 token 的明文配置文件、URL/query token、全文件内存缓存、直接覆盖目标和无限重试。Windows Credential Manager/加密 token 持久化未引入，避免平台 API 与额外依赖；用户需在新的 CLI 进程中重新安全输入 token 或使用新的配对码。
+- **限制**：HTTP 无 TLS 仍不能保护 CLI token 或内容免受同网段窃听；硬链接发布依赖同一目标目录所在文件系统支持硬链接（常见 Windows NTFS 支持）。真实 Windows ACL、断电一致性和真实无线断线仍未实测。

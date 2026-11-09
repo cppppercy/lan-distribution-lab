@@ -16,6 +16,12 @@ server-secret.bin
 objects/
 staging/
 
+# Adjacent local artifacts created by the T006 resumable CLI client
+*.part
+*.part.json
+*.part.stale-*
+*.part.json.stale-*
+
 # Test and type-checking artefacts
 .pytest_cache/
 .mypy_cache/

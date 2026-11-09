@@ -1,7 +1,7 @@
 # 当前项目状态
 
 **更新日期**：2026-11-09
-**整体状态**：T003 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T005 的单 Range/If-Range 后端实现和本地自动化测试已完成，等待 PR/CI 审查。
+**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 的 Python CLI 安全续传实现与本地自动化测试已完成，等待 PR/CI 审查。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -10,7 +10,7 @@
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
-- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；设备发现、续传、多客户端分发：**NOT_IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，T006 待审查）**；设备发现、多客户端分发：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
@@ -22,8 +22,19 @@
 - **T003-B — DONE（实现与本地测试）**：受控上传/下载、SHA-256、SQLite 文件/任务摘要与安全测试已完成。
 - **T003 — DONE**：T003-A/B 及最终验收补修已合并至 main。
 - **T004 — IN_PROGRESS**：Vue Web、同源静态托管、Cookie 集成、显式私有 IPv4 LAN 启动及自动选址启动脚本已实现；手机热点基础互传已验证，平板、SHA-256 对照和断线等 G1 人工项目待补验。
-- **T005 — IN_PROGRESS**：单 Range、强 ETag If-Range、范围任务语义和自动化边界测试已实现；等待 PR/CI 审查。
-- 下一关卡：T005 审查通过后可进入 T006；T004 的剩余真实设备项目仍须如实补验。
+- **T005 — DONE**：单 Range、强 ETag If-Range、范围任务语义和自动化边界测试已合并至 main。
+- **T006 — IN_PROGRESS**：Python CLI `.part`/无秘密状态、Range/If-Range 恢复、强响应校验、SHA-256 发布和自动化故障测试已实现；等待 PR/CI 审查。
+- 下一关卡：T006 审查通过后可进入 T007；T004 的剩余真实设备项目仍须如实补验。
+
+## T006 验证记录（2026-11-09）
+
+```text
+任务：T006 — Python CLI 可靠断点续传
+实际代码变化：新增标准库 urllib 下载客户端和 `python -m lan_distribution_lab download`。默认无回显输入 Bearer token；`--pair` 无回显输入一次性码，在内存中兑换 token；没有 --token 参数，也不把 token 写入 URL、日志、.part 或 .part.json。客户端以邻接 .part/.part.json 记录强 ETag、SHA-256、大小、server、file_id 和安全已落盘偏移；续传只请求 Range + If-Range，并严格检查 200/206/416、Content-Range、Content-Length、ETag 和接收字节。每块 fsync 后原子状态更新；最终 SHA-256 正确才用不覆盖已有文件的硬链接发布目标。200/416、版本或本地状态冲突会隔离旧工件，错误 206/hash 不发布。
+Codex 本地验证：PASS（T006 专用）— `python -m pytest tests/test_resumable_client.py -q`：9 passed in 0.14s，使用独立临时目录和可控本地 transport；覆盖完整下载/哈希、流截断恢复及仅缺失范围、200/416 安全重启、错误 206、损坏 partial、空文件、超时、ENOSPC、重复运行、token 不落盘和 CLI 配对兑换。完整回归：`python -m compileall -q src tests` 通过；`python -m pytest`（Python 3.13.7：76 passed, 1 skipped, 1 warning in 3.28s）；`python -m pip check` 通过；`npm --prefix web run test`（2 passed）和 `npm --prefix web run build` 均通过。GitHub Actions：NOT_RUN（待本任务最终提交后执行）。
+真实设备/网络：NOT_RUN — 未在真实 Windows LAN、手机、平板或真实 Wi-Fi/热点上验证 CLI 中断恢复；这不由本机模拟替代。
+已知限制：HTTP 无 TLS；同网段窃听仍可取得 CLI token/内容。Windows NTFS 通常支持最终硬链接发布，但 Windows ACL、断电一致性、FAT/网络盘和 reparse-point 的实际行为仍待补验。上传续传、多范围、浏览器后台续传、UDP、P2P 和调度未实现。
+```
 
 ## T004 验证记录（2026-11-09）
 

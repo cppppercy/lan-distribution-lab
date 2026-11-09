@@ -2,7 +2,7 @@
 
 面向局域网的可靠文件传输与多终端协同分发系统（课程项目）。
 
-> 项目状态：T004 已提供 Vue Web 界面、同源静态托管和显式 LAN 启动方式；真实手机/平板互通仍须由用户按本文步骤验证。默认服务仍只监听本机。
+> 项目状态：T004 已提供 Vue Web 界面、同源静态托管和显式 LAN 启动方式；T006 提供 Python CLI 的安全下载续传。真实手机/平板互通仍须由用户按本文步骤验证。默认服务仍只监听本机。
 
 ## 项目目标
 
@@ -87,6 +87,32 @@ python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managed
 ### 文件 API（T003-B）
 
 服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载带强 ETag、安全下载名和 `Accept-Ranges: bytes`，支持单一 `Range` 与强 ETag `If-Range`：可满足范围为 `206`，过期/不匹配版本回退完整 `200`，不可满足范围为 `416`。暂不支持多范围、上传续传或上传幂等键。
+
+### Python CLI 安全断点续传（T006）
+
+先从文件列表或元数据响应取得 `file_id`，再在 Windows PowerShell 中执行。默认会以**不回显**的方式提示输入 CLI Bearer token；token 不会写入命令历史、URL、日志、`.part` 或状态 JSON：
+
+```powershell
+python -m lan_distribution_lab download `
+  --server http://192.168.137.1:8000 `
+  --file-id 12345678-1234-5678-1234-567812345678 `
+  --output "$HOME\Downloads\课程资料.pdf"
+```
+
+也可由一次性配对码即时取得 token，并只在本次 CLI 进程内存中使用。先在主机生成一个 `read` 码，然后在下载命令中加 `--pair`；两次提示的输入都不回显：
+
+```powershell
+python -m lan_distribution_lab pair create --scope read --data-dir $dataDir --managed-root $managedRoot
+python -m lan_distribution_lab download `
+  --server http://192.168.137.1:8000 `
+  --file-id 12345678-1234-5678-1234-567812345678 `
+  --output "$HOME\Downloads\课程资料.pdf" `
+  --pair
+```
+
+下载写入同目录的 `课程资料.pdf.part` 和 `课程资料.pdf.part.json`。连接中断后，用相同的服务器、`file_id` 和输出路径再次执行命令；客户端会核对保存的强 ETag、对象大小和已落盘长度，再发送 `Range: bytes=<已完成>-` 与 `If-Range`。每块落盘并原子更新状态，完成后流式验证 SHA-256，随后以不覆盖已有目标的原子硬链接发布最终文件。
+
+如果服务器回退完整 `200`、返回 `416`、ETag/Content-Range 不匹配、本地状态不一致或 SHA-256 失败，客户端绝不会把新字节追加到旧 `.part`；旧工件会改名为 `.stale-<随机值>` 后从头获取。网络故障默认最多重试 2 次（可用 `--retries` 调整），每个 HTTP 请求默认 15 秒超时（`--timeout`）。`--token-stdin` 仅供调用方已能安全保护标准输入的场景；日常优先使用默认不回显提示或 `--pair`。
 
 ### 构建并使用 Web 页面（T004）
 

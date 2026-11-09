@@ -1,6 +1,6 @@
-# 当前架构（T005 Range 实现）
+# 当前架构（T006 CLI 续传实现）
 
-**状态**：T003 后端、T004 Vue Web 与 T005 单 Range/If-Range 下载均已实现并经本机自动化测试/构建验证。T004 已获得手机热点基础收发的用户确认；平板、SHA-256 对照、断线与性能实验仍未验证。CLI 续传、UDP 与调度未实现。
+**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range 与 T006 Python CLI 安全续传均已实现并经本机自动化测试/构建验证。T004 已获得手机热点基础收发的用户确认；平板、真实 LAN 断线恢复与性能实验仍未验证。UDP 与调度未实现。
 
 ## 组件与数据流
 
@@ -10,13 +10,16 @@ flowchart LR
     cli --> state["SQLite + HMAC 服务器秘密"]
     web["Vue 3 Web（同源静态资源）"] --> browser["浏览器 HttpOnly Cookie"]
     browser --> api["FastAPI /api"]
-    client["CLI Bearer"] --> api
+    client["CLI：Bearer 仅进程内存"] --> api
     api --> auth["认证、scope、Origin"]
     api --> multipart["有界 multipart 流解析"]
     multipart --> staging["managed_root/staging"]
     staging --> objects["objects/<server UUID>"]
     auth --> state
-    objects --> download["流式完整下载"]
+    objects --> download["流式完整/Range 下载"]
+    client --> local["目标.part + 无秘密状态 JSON"]
+    download --> local
+    local --> verify["流式 SHA-256 后原子发布目标"]
     api --> transfers["SQLite transfer_records"]
 ```
 
@@ -33,6 +36,7 @@ flowchart LR
 | `storage.py` | SQLite schema、事务、状态目录和服务器秘密 |
 | `files.py` | staging 写入、SHA-256、配额/磁盘检查、原子硬链接发布、对象读取和任务记录 |
 | `runtime.py` | 组合服务及上传/下载 `BoundedSemaphore` 槽位 |
+| `client.py` | 标准库 HTTP CLI 客户端；Bearer 内存使用、Range/If-Range 续传、状态验证、SHA-256 与原子发布 |
 | `web/` | Vue 3 + TypeScript + Vite 源码；构建后的 web/dist 由同一 FastAPI 进程提供 |
 
 ## 已实现 API 与语义
@@ -45,6 +49,7 @@ flowchart LR
 - `GET /api/files/{file_id}/content`：`read` 会话下的完整 `200` 或单 Range `206` 流，带 `Content-Length`、`Accept-Ranges`、强 ETag、安全 `Content-Disposition` 与 `X-Transfer-Id`。`bytes=start-end`、`start-`、`-suffixLength` 通过 seek 和剩余字节计数流式读取；不支持多范围。`If-Range` 仅精确匹配强 ETag 时允许 `206`，否则回退完整 `200`；不可满足范围为 `416` 并带总大小。
 - `GET /api/transfers/{transfer_id}`：仅任务所属会话可见。`completed` 仅表示服务端读完/写完本地字节，**不表示远端客户端已经保存成功**。
 - `GET /`：仅在已构建 web/dist 时提供同源 Vue 页面；页面通过 Cookie 请求既有 API，不使用 CORS、localStorage、URL token 或 QR token。
+- `python -m lan_distribution_lab download`：用 Bearer 调用元数据与内容 API。它不接受 token 命令行参数；默认以无回显提示读取 token，或用 `--pair` 将无回显的配对码兑换为仅进程内 token。邻接 `.part.json` 只记录 server、file_id、ETag、大小、SHA-256 与已落盘字节；不记录 token 或文件系统路径。
 
 ## 安全与资源边界
 
@@ -52,10 +57,12 @@ flowchart LR
 
 客户端展示名从不决定对象路径，拒绝路径分隔符、Windows 保留字符、控制字符、`.` 与 `..`。对象/目录操作以服务端 UUID 并做普通文件、符号链接/reparse-point 检查；本机受限环境未能创建符号链接，因此真实 Windows 链接/reparse-point 竞态仍是未验证风险。
 
+CLI 每次开始先读取文件元数据，再只接受与之完全匹配的强 ETag、`Content-Length`、`Content-Range` 和最终 SHA-256。已有 `.part` 时请求 `Range: bytes=<offset>-` 与 `If-Range`；`200`、`416` 或本地状态/版本不一致会隔离旧工件并有限地从头开始，错误 `206` 不写入任何新字节。每块先 `fsync` `.part`，再原子替换状态 JSON；最终以同目录硬链接创建目标名，避免覆盖并发出现的用户文件。
+
 ## 明确未实现
 
 - 上传 `Idempotency-Key` 与上传断点续传
-- Python CLI 续传（T006）、UDP 发现、调度与公网部署
+- 上传续传、UDP 发现、调度与公网部署
 - HTTPS、真实手机/平板、真实 LAN 性能/可靠性实验
 
 HTTP 没有 TLS：短时令牌、Cookie 和文件内容仍可能被同网段窃听或篡改。完整契约见 [API_CONTRACT.md](API_CONTRACT.md)，风险见 [THREAT_MODEL.md](THREAT_MODEL.md)。

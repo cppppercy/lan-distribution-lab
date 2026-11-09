@@ -14,8 +14,8 @@
 | T003-A | DONE | 本机配对码、会话授权、SQLite 状态和受控存储目录基础 | G1-A | T002 |
 | T003-B | DONE | 受控文件上传/下载、校验、元数据与传输记录 | G1-B | T003-A |
 | T004 | IN_PROGRESS | Vue 响应式界面、同源静态托管、显式 LAN 启动和 Windows 自动选址启动脚本已实现；手机热点基础互传已验证，G1 剩余人工项目待补验 | G1 | T003 |
-| T005 | IN_PROGRESS | 单 HTTP Range、If-Range 版本保护、范围任务语义与边界测试已实现；等待审查/PR 验证 | G2 | T003 |
-| T006 | TODO | Python CLI 断点续传、失败恢复、完整性验证 | G2 | T005 |
+| T005 | DONE | 单 HTTP Range、If-Range 版本保护、范围任务语义与边界测试已合并 | G2 | T003 |
+| T006 | IN_PROGRESS | Python CLI 断点续传、失败恢复、完整性验证已实现；等待审查/PR 验证 | G2 | T005 |
 | T007 | TODO | 多会话任务记录、顺序与普通并发策略 | G3 | T006 |
 | T008 | TODO | 受控并发策略与调度实验入口 | G3 | T007 |
 | T009 | TODO | UDP 桌面发现、连接回退及设备授权体验 | G3 | G1 稳定后 |
@@ -91,11 +91,21 @@
 
 ### T005（HTTP Range 与文件版本保护）
 
-**完成内容（待审查）**：`GET /api/files/{file_id}/content` 在保留无 Range 完整 `200` 下载的基础上，实现 RFC 9110 单一 `bytes=start-end`、`start-` 与 `-suffixLength`。可满足请求为 `206`，带正确 `Content-Range`、`Content-Length`、`Accept-Ranges` 和强 ETag；多范围/非法语法为 `400`，不可满足范围为 `416` 且带 `Content-Range: bytes */total`。`If-Range` 只接受精确的强 ETag；不匹配时回退完整 `200`。范围流通过 seek 和剩余字节计数读取，不缓存整个对象；范围任务字节数仅记录该次响应范围。
+**完成内容**：`GET /api/files/{file_id}/content` 在保留无 Range 完整 `200` 下载的基础上，实现 RFC 9110 单一 `bytes=start-end`、`start-` 与 `-suffixLength`。可满足请求为 `206`，带正确 `Content-Range`、`Content-Length`、`Accept-Ranges` 和强 ETag；多范围/非法语法为 `400`，不可满足范围为 `416` 且带 `Content-Range: bytes */total`。`If-Range` 只接受精确的强 ETag；不匹配时回退完整 `200`。范围流通过 seek 和剩余字节计数读取，不缓存整个对象；范围任务字节数仅记录该次响应范围。
 
 **验收证据（本地）**：文件 API 自动化覆盖 200/206/416、精确/开放/后缀/截断范围、空文件、非法和多范围、未授权、If-Range、范围拼接 SHA-256、seek/read 上界、传输状态与下载槽位释放；完整套件/CI 结果见 `docs/STATUS.md`。
 
 **非目标**：多范围 MIME 响应、上传续传、T006 Python CLI 断点续传、UDP、P2P、分发调度。
+
+### T006（Python CLI 可靠断点续传）
+
+**完成内容（待审查）**：新增 `python -m lan_distribution_lab download`。客户端以无回显 Bearer token 提示（或 `--pair` 无回显配对码即时兑换）认证；没有 token 命令行参数、URL token 或 token 持久化。它先读取受保护元数据，以相邻 `.part`/`.part.json` 保存强 ETag、SHA-256、大小、server、file_id 和已落盘字节；恢复时使用 `Range` + `If-Range`。每块流式写入并显示进度，数据 `fsync` 后原子写状态；最终流式 SHA-256 后以不覆盖已有目标的硬链接发布。
+
+**恢复与失败语义**：只接受精确的 206、Content-Range、Content-Length 与 ETag。续传收到了完整 200、416 或本地/元数据版本不一致时，旧工件改名为随机 `.stale-*` 后最多重新开始一次；错误 206 和 hash 失败绝不追加或发布。网络错误默认有限重试两次；超时、磁盘写入失败、目标存在及不安全路径均返回失败而不覆盖用户目标。
+
+**验收证据（本地）**：`tests/test_resumable_client.py` 覆盖完整 hash 下载、可控 HTTP 流截断后的缺失范围恢复、200/416 安全重启、错误 206 拒绝、损坏 partial、空文件、超时、ENOSPC 注入、重复执行、token 不写入状态以及配对换 token 的内存边界。完整套件、前端构建与远端 CI 结果记录在 `docs/STATUS.md`。
+
+**非目标**：上传续传、多范围、浏览器后台续传、UDP、P2P、调度、TLS/公网部署和真实无线断线实验。
 
 ### T003 及后续任务共同模板
 

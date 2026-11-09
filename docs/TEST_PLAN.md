@@ -1,6 +1,6 @@
 # 测试计划与需求追踪（T002 设计）
 
-**状态**：T003-A/B 与 T005 单范围下载已实施并运行自动化测试；Python CLI 续传、平板及其余真实设备/网络实验仍未运行。每个用例只有在对应阶段真正执行并保留证据后才能标为 PASS。
+**状态**：T003-A/B、T005 单范围下载与 T006 Python CLI 续传已实施并运行自动化测试；平板及其余真实设备/网络实验仍未运行。每个用例只有在对应阶段真正执行并保留证据后才能标为 PASS。
 
 ## 1. 执行原则
 
@@ -73,4 +73,5 @@
 | T003-A GitHub Actions | PASS（PR #3） | Windows / Python 3.12 运行 pytest 成功；分支推送 39 秒、PR 检查 40 秒 |
 | T003-B 文件、路径、配额、清理 | PASS（本地自动化） | `tests/test_file_api.py`：上传/下载 SHA-256、0 B、Unicode/重名、权限、展示名、文件/请求/总配额、ENOSPC、staging 清理、任务隐私、Origin、槽位和有界 multipart 流 |
 | T004 手机热点基础收发 | PARTIAL_PASS（用户人工） | 2026-11-09，Windows 移动热点，服务 `192.168.137.1:8003`；手机加载 Vue 页面，电脑和手机以独立 read_write 码配对并确认双向收发。校园 Wi-Fi 超时原因未确认；平板、设备/浏览器/文件大小、SHA-256 和断线仍 NOT_RUN。 |
-| T005 Range/If-Range | PASS（本地自动化） | `tests/test_file_api.py` 覆盖 200/206/416、精确/开放/后缀/截断范围、空文件、非法/多范围、未授权、强 ETag If-Range 回退、范围拼接 SHA-256、seek/read 边界和下载槽位释放；CLI 续传仍留给 T006。 |
+| T005 Range/If-Range | PASS（本地自动化） | `tests/test_file_api.py` 覆盖 200/206/416、精确/开放/后缀/截断范围、空文件、非法/多范围、未授权、强 ETag If-Range 回退、范围拼接 SHA-256、seek/read 边界和下载槽位释放。 |
+| T006 CLI 续传 | PASS（本地自动化） | `tests/test_resumable_client.py` 覆盖完整 SHA-256、截断流恢复、仅请求缺失范围、200/416 版本重启、错误 206、损坏 partial、空文件、超时、ENOSPC、重复运行、token 不落状态与配对换 token。真实 WLAN 断线仍 NOT_RUN。 |
