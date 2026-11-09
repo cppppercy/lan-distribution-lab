@@ -13,7 +13,7 @@
 | T003 | DONE | 后端受控共享文件、列表、下载、上传与校验；T003-A/B 已合并并通过最终补修审核 | G1 | T002 |
 | T003-A | DONE | 本机配对码、会话授权、SQLite 状态和受控存储目录基础 | G1-A | T002 |
 | T003-B | DONE | 受控文件上传/下载、校验、元数据与传输记录 | G1-B | T003-A |
-| T004 | IN_PROGRESS | Vue 响应式界面、同源静态托管和显式 LAN 启动已实现；等待真实手机/平板互通记录 | G1 | T003 |
+| T004 | IN_PROGRESS | Vue 响应式界面、同源静态托管、显式 LAN 启动和 Windows 自动选址启动脚本已实现；等待真实手机/平板互通记录 | G1 | T003 |
 | T005 | TODO | HTTP Range/版本保护/边界测试 | G2 | T003 |
 | T006 | TODO | Python CLI 断点续传、失败恢复、完整性验证 | G2 | T005 |
 | T007 | TODO | 多会话任务记录、顺序与普通并发策略 | G3 | T006 |
@@ -81,9 +81,9 @@
 
 ### T004（局域网 Web 界面与多终端互通）
 
-**完成内容（2026-11-09）**：新增 Vue 3 + TypeScript + Vite 单页界面，同源提供 Cookie 配对、文件列表、XHR 上传进度、浏览器原生下载发起、错误/加载/空状态和退出会话。FastAPI 在 `web/dist` 构建存在时提供静态页面；`serve --host <私有 IPv4>` 显式启用 LAN，拒绝 all-interface 和公网绑定，并以监听 URL 作为默认 Cookie Origin。CI 同时运行 npm 安装、前端测试/构建和 Python pytest。
+**完成内容（2026-11-09）**：新增 Vue 3 + TypeScript + Vite 单页界面，同源提供 Cookie 配对、文件列表、XHR 上传进度、浏览器原生下载发起、错误/加载/空状态和退出会话。FastAPI 在 `web/dist` 构建存在时提供静态页面；`serve --host <私有 IPv4>` 显式启用 LAN，拒绝 all-interface 和公网绑定，并以监听 URL 作为默认 Cookie Origin。`scripts/start-lan.ps1` 让 Windows 用户可一条命令完成私有地址选择、Web 构建、读写配对码创建和服务启动：优先移动热点 `192.168.137.1`，多网卡歧义时必须显式指定地址。CI 同时运行 npm 安装、前端测试/构建和 Python pytest。
 
-**验收证据**：本地前端 `npm run test` 和 `npm run build`、完整 Python pytest、FastAPI 实际 localhost 静态页面/健康接口请求均已执行；具体结果记录在 `docs/STATUS.md`。前端不存储访问 token，不引入 CORS 绕过认证；上传/下载仍复用 T003 API 与安全限制。
+**验收证据**：本地前端 `npm run test` 和 `npm run build`、完整 Python pytest、FastAPI 实际 localhost 静态页面/健康接口请求均已执行；Windows 自动启动脚本也已在当前移动热点地址完成地址选择、生产构建、配对码创建、监听和健康接口请求验证。具体结果记录在 `docs/STATUS.md`。前端不存储访问 token，不引入 CORS 绕过认证；上传/下载仍复用 T003 API 与安全限制。
 
 **未验证/非目标**：真实手机、平板、家庭 Wi-Fi/热点互通必须由用户按 README 的人工步骤执行并记录，不能标记 PASS；HTTP Range/续传、UDP、P2P、分发调度、HTTPS 和防火墙修改不在范围内。
 
