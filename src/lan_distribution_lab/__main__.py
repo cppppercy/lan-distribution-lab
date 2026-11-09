@@ -1,8 +1,9 @@
-"""Windows-friendly local operator commands and localhost server entry point."""
+"""Windows-friendly local commands and explicit private-LAN server entry point."""
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 from pathlib import Path
 
 import uvicorn
@@ -16,8 +17,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m lan_distribution_lab")
     commands = parser.add_subparsers(dest="command")
 
-    serve = commands.add_parser("serve", help="run the localhost HTTP service")
+    serve = commands.add_parser("serve", help="run the HTTP service (localhost by default)")
     _add_storage_arguments(serve)
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="listen only on this loopback or private LAN IPv4 address (default: 127.0.0.1)",
+    )
     serve.add_argument("--port", type=int, default=8000)
 
     pairing = commands.add_parser("pair", help="manage short-lived local pairing codes")
@@ -35,8 +41,12 @@ def main(argv: list[str] | None = None) -> None:
         arguments = parser.parse_args(["serve"])
 
     if arguments.command == "serve":
-        settings = _settings_from_arguments(arguments)
-        uvicorn.run(create_app(settings), host="127.0.0.1", port=arguments.port, reload=False)
+        try:
+            settings = _settings_from_arguments(arguments)
+            host = _listen_host(arguments.host)
+        except argparse.ArgumentTypeError as error:
+            parser.error(str(error))
+        uvicorn.run(create_app(settings), host=host, port=arguments.port, reload=False)
         return
 
     if arguments.command == "pair" and arguments.pair_command == "create":
@@ -70,11 +80,26 @@ def _add_storage_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _settings_from_arguments(arguments: argparse.Namespace) -> Settings:
     port = getattr(arguments, "port", 8000)
-    base = Settings.from_environment(origin=f"http://127.0.0.1:{port}")
+    host = _listen_host(getattr(arguments, "host", "127.0.0.1"))
+    base = Settings.from_environment()
     data_dir = arguments.data_dir or base.data_dir
     managed_root = arguments.managed_root or base.managed_root
-    origin = arguments.origin or base.origin
+    # A production web page is served from this listener.  An explicit --origin
+    # is reserved for local Vite development; environment state must not silently
+    # make a LAN browser's Origin mismatch the selected listening address.
+    origin = arguments.origin or f"http://{host}:{port}"
     return Settings(data_dir=data_dir, managed_root=managed_root, origin=origin.rstrip("/"))
+
+
+def _listen_host(value: str) -> str:
+    """Accept explicit loopback/private IPv4 bindings, never an all-interface bind."""
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError as error:
+        raise argparse.ArgumentTypeError("--host must be an IPv4 address") from error
+    if address.is_unspecified or not (address.is_loopback or address.is_private):
+        raise argparse.ArgumentTypeError("--host must be a loopback or private LAN IPv4 address")
+    return str(address)
 
 
 if __name__ == "__main__":

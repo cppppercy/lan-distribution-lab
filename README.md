@@ -2,7 +2,7 @@
 
 面向局域网的可靠文件传输与多终端协同分发系统（课程项目）。
 
-> 项目状态：T003-A/B 的认证、会话、受控文件上传/下载与任务摘要已在本地自动化测试中验证；Range/续传、设备发现、调度、页面 UI 和真实设备验证尚未实现。默认服务仍只监听本机。
+> 项目状态：T004 已提供 Vue Web 界面、同源静态托管和显式 LAN 启动方式；真实手机/平板互通仍须由用户按本文步骤验证。默认服务仍只监听本机。
 
 ## 项目目标
 
@@ -27,7 +27,7 @@
 
 代码、密钥、真实成果以当前仓库与测试记录为准。本文不声称任何尚未执行的测试通过。
 
-## 当前可运行基线（T001 + T003-A）
+## 当前可运行基线（T001 + T003 + T004）
 
 ### 前置条件
 
@@ -86,7 +86,38 @@ python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managed
 
 ### 文件 API（T003-B）
 
-服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载为完整 `200` 流，带 ETag 和安全下载名。没有浏览器页面或正式 Python CLI 文件客户端，暂不支持 Range、续传或上传幂等键。
+服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载为完整 `200` 流，带 ETag 和安全下载名。暂不支持 Range、续传或上传幂等键。
+
+### 构建并使用 Web 页面（T004）
+
+先构建一次 Vue 页面；构建产物不提交到 Git，但 `python -m lan_distribution_lab serve` 会从 `web/dist` 同源提供它：
+
+```powershell
+npm --prefix web ci
+npm --prefix web run build
+python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managedRoot
+```
+
+在电脑浏览器打开 `http://127.0.0.1:8000/`，输入由本机 `pair create --scope read_write` 生成的六码配对码。浏览器只持有 HttpOnly Cookie；页面不会保存或展示访问 token。上传使用浏览器实际可获得的进度事件。点击“下载”只表示浏览器已收到下载请求，是否保存完成请以浏览器下载列表为准。
+
+### 显式局域网启动（Windows）
+
+默认命令仍只监听 `127.0.0.1`。要让同一家庭 Wi-Fi 的手机或平板访问，先在主机 PowerShell 中确认要使用的**具体私有 IPv4**（例如 `192.168.1.23`），构建页面并使用该地址启动：
+
+```powershell
+ipconfig
+$lanIp = "192.168.1.23" # 替换为本机 Wi-Fi 的 IPv4，不要写 0.0.0.0
+$dataDir = Join-Path $env:LOCALAPPDATA "LANDistributionLab\state"
+$managedRoot = Join-Path $env:LOCALAPPDATA "LANDistributionLab\managed"
+npm --prefix web ci
+npm --prefix web run build
+python -m lan_distribution_lab pair create --scope read_write --data-dir $dataDir --managed-root $managedRoot
+python -m lan_distribution_lab serve --host $lanIp --port 8000 --data-dir $dataDir --managed-root $managedRoot
+```
+
+访问地址为 `http://<你的 LAN IP>:8000/`，例：`http://192.168.1.23:8000/`。`--host` 只接受回环或私有 IPv4，拒绝 `0.0.0.0` 和公网地址；未显式传入 `--origin` 时，浏览器 Origin 自动设置为该 URL，Cookie 配对、上传和退出会话可同源工作。项目不会修改 Windows 防火墙、端口映射或公网设置。
+
+手机/平板人工测试：连接同一 Wi-Fi；先用浏览器打开上述 URL、输入刚生成的配对码；建议先上传/下载一个中文名 1–10 MB 文件和一个空文件，再在浏览器下载列表确认保存完成并核对 SHA-256。记录设备型号、浏览器、Wi-Fi/热点、文件大小、上传结果、下载保存结果和错误信息。若打不开页面，依次检查 IP 是否为当前 Wi-Fi IPv4、设备是否同网段、服务终端是否仍运行，以及 Windows 防火墙/路由器客户端隔离策略；本项目不会自动改变这些系统设置。
 
 默认资源限制为单文件 64 MiB、请求 64 MiB + 128 KiB、受控对象总额 1 GiB、保留 64 MiB 磁盘空间、同时上传 2/下载 8。超限、配额不足或 `ENOSPC` 会失败且不发布部分文件。`managed_root/objects` 和 `managed_root/staging` 仅由服务端生成 UUID 名称；客户端文件名不会成为磁盘路径。
 
@@ -94,6 +125,8 @@ python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managed
 
 ```powershell
 python -m pytest
+npm --prefix web run test
+npm --prefix web run build
 ```
 
-当前自动化测试覆盖健康接口、配对码一次性/过期/并发兑换、限速、Cookie/Bearer、权限范围、撤销、Origin、摘要存储与重启持久化。它不等同于手机、平板、真实 Wi-Fi、Windows ACL/reparse point 或文件传输验证。详见 [当前架构](docs/ARCHITECTURE.md)、[威胁模型](docs/THREAT_MODEL.md) 与 [实验记录](docs/EXPERIMENTS.md)。
+当前自动化测试覆盖健康接口、配对码一次性/过期/并发兑换、限速、Cookie/Bearer、权限范围、撤销、Origin、摘要存储与重启持久化；也覆盖显式 LAN host/Origin、静态页面不遮蔽 API，以及同源前端 API 调用。它不等同于手机、平板、真实 Wi-Fi、Windows ACL/reparse point 或真实浏览器下载保存验证。详见 [当前架构](docs/ARCHITECTURE.md)、[威胁模型](docs/THREAT_MODEL.md) 与 [实验记录](docs/EXPERIMENTS.md)。

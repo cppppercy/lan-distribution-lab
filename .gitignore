@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 .venv/
 .test-temp/
+web/node_modules/
+web/dist/
+web/coverage/
+web/*.tsbuildinfo
 
 # Local LAN Distribution Lab state when a developer points it into this checkout
 *.sqlite3
