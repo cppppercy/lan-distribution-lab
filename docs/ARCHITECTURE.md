@@ -1,6 +1,6 @@
-# 当前架构（T003-B 实现）
+# 当前架构（T004 Web 实现）
 
-**状态**：T003-A 的本机配对/会话/SQLite 基础与 T003-B 的文件传输后端均已实现并通过本地自动化测试。T003 整体仍为 `IN_PROGRESS`，等待最终代码审核；Range、CLI 续传、Web UI、UDP 与真实设备实验未实现。
+**状态**：T003 后端和 T004 Vue Web 界面均已实现并经本机自动化测试/构建验证。T004 的真实手机、平板与家庭 Wi-Fi 互通仍为 NOT_RUN；Range、CLI 续传、UDP 与真实设备实验未实现。
 
 ## 组件与数据流
 
@@ -8,7 +8,8 @@
 flowchart LR
     operator["Windows 操作者"] --> cli["pair create（仅本机 CLI）"]
     cli --> state["SQLite + HMAC 服务器秘密"]
-    browser["浏览器 Cookie"] --> api["FastAPI /api"]
+    web["Vue 3 Web（同源静态资源）"] --> browser["浏览器 HttpOnly Cookie"]
+    browser --> api["FastAPI /api"]
     client["CLI Bearer"] --> api
     api --> auth["认证、scope、Origin"]
     api --> multipart["有界 multipart 流解析"]
@@ -19,7 +20,7 @@ flowchart LR
     api --> transfers["SQLite transfer_records"]
 ```
 
-默认入口 `python -m lan_distribution_lab` 仍固定监听 `127.0.0.1:8000`，不修改防火墙、不自动公开 LAN/公网。`pair create` 与 `serve` 必须使用同一组分离的绝对 `data_dir`、`managed_root`。
+默认入口 python -m lan_distribution_lab 仍固定监听 127.0.0.1:8000，不修改防火墙、不自动公开 LAN/公网。serve --host {私有 IPv4} 是唯一的显式 LAN 方式：拒绝 0.0.0.0/公网地址，默认将 Origin 设为同一 http://{host}:{port}。pair create 与 serve 必须使用同一组分离的绝对 data_dir、managed_root。
 
 ## 模块边界
 
@@ -32,6 +33,7 @@ flowchart LR
 | `storage.py` | SQLite schema、事务、状态目录和服务器秘密 |
 | `files.py` | staging 写入、SHA-256、配额/磁盘检查、原子硬链接发布、对象读取和任务记录 |
 | `runtime.py` | 组合服务及上传/下载 `BoundedSemaphore` 槽位 |
+| `web/` | Vue 3 + TypeScript + Vite 源码；构建后的 web/dist 由同一 FastAPI 进程提供 |
 
 ## 已实现 API 与语义
 
@@ -42,6 +44,7 @@ flowchart LR
 - `POST /api/uploads`：`read_write` 会话；Cookie 请求检查 Origin；multipart 总请求、文件、总配额、可用磁盘和上传槽位均有限制。文件写入 staging 时分块计算 SHA-256，随后以服务端 UUID 硬链接发布到 objects，并写入 SQLite。
 - `GET /api/files/{file_id}/content`：`read` 会话下的完整 200 流，带 `Content-Length`、强 ETag、安全 `Content-Disposition` 与 `X-Transfer-Id`；不支持 Range。
 - `GET /api/transfers/{transfer_id}`：仅任务所属会话可见。`completed` 仅表示服务端读完/写完本地字节，**不表示远端客户端已经保存成功**。
+- `GET /`：仅在已构建 web/dist 时提供同源 Vue 页面；页面通过 Cookie 请求既有 API，不使用 CORS、localStorage、URL token 或 QR token。
 
 ## 安全与资源边界
 
@@ -53,7 +56,7 @@ flowchart LR
 
 - `Range` / `If-Range` / 206（T005）
 - 上传 `Idempotency-Key` 与上传断点续传
-- Python CLI 续传、Vue 页面、UDP 发现、调度与公网部署
+- Python CLI 续传、UDP 发现、调度与公网部署
 - HTTPS、真实手机/平板、真实 LAN 性能/可靠性实验
 
 HTTP 没有 TLS：短时令牌、Cookie 和文件内容仍可能被同网段窃听或篡改。完整契约见 [API_CONTRACT.md](API_CONTRACT.md)，风险见 [THREAT_MODEL.md](THREAT_MODEL.md)。

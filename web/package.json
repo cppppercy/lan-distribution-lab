@@ -1,0 +1,22 @@
+{
+  "name": "lan-distribution-lab-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "vue": "3.5.45"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "@vitejs/plugin-vue": "5.2.3",
+    "typescript": "5.7.3",
+    "vite": "6.4.5",
+    "vitest": "5.1.0",
+    "vue-tsc": "3.3.14"
+  }
+}

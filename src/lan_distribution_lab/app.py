@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import asyncio
+from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.requests import ClientDisconnect
 
@@ -39,7 +41,12 @@ class PairingRequest(BaseModel):
     device_label: str | None = None
 
 
-def create_app(settings: Settings | None = None, *, runtime: Runtime | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    runtime: Runtime | None = None,
+    web_dist_dir: Path | None = None,
+) -> FastAPI:
     """Create an app without initializing local state until an auth route needs it."""
     selected_settings = settings or Settings.from_environment()
     application = FastAPI(title="LAN Distribution Lab", version="0.2.0")
@@ -259,6 +266,12 @@ def create_app(settings: Settings | None = None, *, runtime: Runtime | None = No
             authenticated.session.session_id, transfer_id
         )
         return _transfer_payload(transfer)
+
+    # Register static files only after every /api route.  In production the Vue
+    # build is served from the same origin, so browser cookies need no CORS rule.
+    static_dir = web_dist_dir or Path(__file__).resolve().parents[2] / "web" / "dist"
+    if static_dir.is_dir():
+        application.mount("/", StaticFiles(directory=static_dir, html=True), name="web")
 
     return application
 
