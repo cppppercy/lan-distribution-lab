@@ -43,7 +43,7 @@ GitHub Actions：PASS — PR #4 的功能提交 `9327cbf4a4d1851001a15f9f4c5048e
 任务：T005 — HTTP Range 与文件版本保护
 实际代码变化：下载端点保留无 Range 的完整 200，并实现单一 bytes=start-end、start-、-suffixLength 的 206 流；响应带 Accept-Ranges、Content-Range、范围 Content-Length 和强 ETag。多范围或非法语法返回 400 invalid_range；不可满足范围返回 416 和 bytes */total。If-Range 仅精确强 ETag 匹配时返回 206；弱/日期/不匹配值回退完整 200。流通过 seek 和剩余字节计数发送，范围任务的 size_bytes/bytes_transferred 是本次响应范围，不是完整对象。
 Codex 本地验证：PASS — python -m compileall -q src tests；python -m pytest（Python 3.13.7：67 passed, 1 skipped, 1 warning）；python -m pip check（No broken requirements found）；npm --prefix web run test（2 passed）；npm --prefix web run build（通过）。新增范围测试将多个 206 数据段顺序拼接后验证 SHA-256 与原对象一致，并覆盖空文件、非法/多范围、416、If-Range、未授权、流式 read 上界与下载槽位释放。
-GitHub Actions：NOT_RUN — 本地提交和推送后再以远端实际 Checks 为准。
+GitHub Actions：PASS — [分支推送](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42582870820/job/129045576098) 与 [PR #5](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42582914355/job/129045714390) 均在 Windows / Python 3.12 成功执行 pytest、前端测试与生产构建（分别 1 分 19 秒、1 分 15 秒）。
 非目标/限制：未实现多范围 MIME、Python CLI 断点续传、上传续传、UDP、P2P 或调度；Range 的 completed 仅说明服务器读完并发送了所选响应范围，不能证明远端客户端保存完成。Windows 测试环境仍不允许创建符号链接，相关 reparse-point 测试跳过。
 ```
 
