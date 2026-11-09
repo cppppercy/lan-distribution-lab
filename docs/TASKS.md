@@ -10,7 +10,9 @@
 | --- | --- | --- | --- | --- |
 | T001 | DONE | 初始化工程和最小 HTTP 健康接口、自动化测试、CI、启动说明 | G0 | 规范已发布 |
 | T002 | DONE | 文件 API 设计与威胁模型；接口契约、权限与路径安全测试设计 | G1 设计前置 | T001 |
-| T003 | TODO | 后端受控共享文件、列表、下载、上传与校验 | G1 | T002 |
+| T003 | IN_PROGRESS | 后端受控共享文件、列表、下载、上传与校验；仅在 T003-A/B 均完成后可 DONE | G1 | T002 |
+| T003-A | DONE | 本机配对码、会话授权、SQLite 状态和受控存储目录基础 | G1-A | T002 |
+| T003-B | TODO | 受控文件上传/下载、校验、元数据与传输记录 | G1-B | T003-A |
 | T004 | TODO | Vue 移动端基础界面及 PC↔移动设备真实互通 | G1 | T003 |
 | T005 | TODO | HTTP Range/版本保护/边界测试 | G2 | T003 |
 | T006 | TODO | Python CLI 断点续传、失败恢复、完整性验证 | G2 | T005 |
@@ -58,6 +60,22 @@
 **验收证据（2026-11-08）**：本地 Markdown 链接、必需 API 路径和未来功能状态检查通过；`python -m pytest` 在 Python 3.13.7 下为 `2 passed, 1 warning in 0.39s`。PR #2 的 GitHub Actions 亦在 Windows / Python 3.12 通过（30 秒）。警告来自上游 Starlette/AnyIO 弃用类型别名。没有文件传输或真实 LAN 测试结果。
 
 **对 T003 的建议范围**：按契约实现配对/会话、`managed_root`、私有 staging、完整流式上传下载、SHA-256、任务摘要和对应 P0 自动化测试；Range/If-Range、CLI 续传及移动端真实互通分别留给 T005/T006/T004。
+
+### T003-A（认证、会话及存储基础）
+
+**完成内容（2026-11-09）**：实现本机 `pair create` 控制命令、六位一次性十分钟配对码、`POST /api/pairings`、浏览器 HttpOnly/SameSite Cookie、CLI Bearer token、`DELETE /api/sessions/current`、scope 依赖、SQLite 会话/限速状态与受控 `objects`/`staging` 目录基础。服务仍默认绑定 `127.0.0.1`，未创建任何文件业务 API。
+
+**验收证据**：`.\.venv\Scripts\python.exe -m pytest` 于 Python 3.13.7 下通过 `20 passed, 1 warning in 1.23s`。测试使用独立临时目录，覆盖有效/重复/过期/并发兑换、失败锁定、Cookie/Bearer、权限范围、撤销、Origin、无明文 token、重启持久化与原健康接口。warning 为上游 Starlette TestClient 对 AnyIO 弃用类型别名的提示。
+
+**未验证/非目标**：未做真实设备、真实 LAN、Windows ACL/reparse-point、TLS 或任何文件上传/下载测试；不将这些项目标为完成。
+
+### T003-B（受控文件上传、下载、校验及任务记录）
+
+**目标**：基于 T003-A 已实现会话依赖与隔离目录，落实文件对象的流式上传/下载、SHA-256、配额/ENOSPC/中断清理、元数据与传输记录，并实现对应 P0 测试。
+
+**明确不做**：HTTP Range/If-Range（T005）、CLI 续传（T006）、Vue、UDP、调度与真实设备性能实验。
+
+**开始条件**：T003-A 的 PR 被审查，且后续实现保持 `managed_root` 路径边界、`read`/`read_write` 依赖、默认 localhost 监听和 HTTP 风险声明。
 
 ### T003 及后续任务共同模板
 

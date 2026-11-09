@@ -73,13 +73,13 @@ flowchart LR
 | 接口 | 授权 | 实现状态 | 主要阶段 |
 | --- | --- | --- | --- |
 | `GET /api/health` | 否 | **已实现（T001）** | T001 |
-| `POST /api/pairings` | 配对码 | 设计中 | T003 |
+| `POST /api/pairings` | 配对码 | **已实现（T003-A）** | T003-A |
 | `GET /api/files` | `read` | 设计中 | T003 |
 | `GET /api/files/{file_id}` | `read` | 设计中 | T003 |
 | `POST /api/uploads` | `read_write` | 设计中 | T003 |
 | `GET /api/files/{file_id}/content` | `read` | 设计中；Range 于 T005 | T003/T005 |
 | `GET /api/transfers/{transfer_id}` | 任务所属会话 | 设计中 | T003 |
-| `DELETE /api/sessions/current` | 是 | 设计中 | T003 |
+| `DELETE /api/sessions/current` | 是 | **已实现（T003-A）** | T003-A |
 
 ## 3. 接口详细定义
 
@@ -97,7 +97,7 @@ flowchart LR
 
 ### 3.2 `POST /api/pairings`
 
-- **调用方/用途**：已获得操作者离线展示的短时配对码的浏览器或 CLI；创建限时会话（FR-006）。操作者生成配对码是本地控制面操作，不是对 LAN 暴露的 API。
+- **调用方/用途**：已获得操作者离线展示的短时配对码的浏览器或 CLI；创建限时会话（FR-006）。操作者生成配对码是本地控制面操作，不是对 LAN 暴露的 API。**T003-A 已实现**；文件 API 仍未实现。
 - **请求**：`Content-Type: application/json`。
 
 ```json
@@ -191,10 +191,10 @@ CLI 响应额外含 `access_token`，浏览器响应不得含该字段。配对�
 
 ### 3.8 `DELETE /api/sessions/current`
 
-- **调用方/用途**：浏览器“退出此设备”或 CLI 撤销当前凭据（FR-006）。
+- **调用方/用途**：浏览器“退出此设备”或 CLI 撤销当前凭据（FR-006）。**T003-A 已实现**。
 - **成功响应**：`204`；浏览器同时清除 Cookie。会话服务端状态立刻标为撤销，正在进行的同会话传输在下一授权检查/分块边界停止。
 - **失败/限制**：缺失或未知凭据 `401`；Cookie 认证的状态变更必须做 Origin 检查。无请求体。
-- **幂等性**：对同一已验证会话的重复调用返回 `204`，不泄露其先前状态；过期令牌仍返回 `401`。
+- **幂等性**：首次以有效会话调用返回 `204`。撤销后该凭据不能再通过认证，因此重复使用同一 Cookie/Bearer 返回 `401`；这优先保证“撤销即刻失效”，不暴露撤销前状态。客户端应将成功的 `204` 视为本地会话已结束，而不是依赖重试语义。
 
 ### 3.9 移动浏览器 UI 边界（FR-007，T004 设计）
 
