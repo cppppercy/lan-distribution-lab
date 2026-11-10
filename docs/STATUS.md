@@ -60,9 +60,10 @@ GitHub Actions：PASS — 上述提交推送后的两次工作流均在 Windows 
 真实设备/网络：NOT_RUN — 控制器运行在一台电脑上，逻辑客户端使用本机独立会话；未做手机、平板或真实 Wi-Fi 的多设备分发，也不把本机线程当作真实远程设备。
 已知限制：未实现 T008 动态调度/优先级/速率控制；并发上限 8；服务端槽位不足时客户端直接失败（不做无限重试）；HTTP 无 TLS；Windows ACL 与断电一致性未实测。
 审核补修（2026-11-10，待 PR#7 复审）：(1) 记录路径安全——下载启动前规范化校验 --results/--records 与各客户端目标、.part、.part.json，结果与记录不得同路径，冲突提前失败且不启动下载、不写结果、不改变已有文件；write_result_json 支持受保护路径并在原子替换前拒绝覆盖；SQLite 只追加不覆盖。(2) 独立凭据——同一分发内重复 Bearer Token 提前拒绝且不打印 token；--pair 保持每客户端独立配对码。新增 10 项回归测试（16 → 26），完整 pytest 为 114 passed, 1 skipped。
-当前分支、工作区状态、PR：feat/T007-distribution-strategies；PR #7（https://github.com/cppppercy/lan-distribution-lab/pull/7）未合并，HEAD 为 0969200528c75fd18418c5551b6ae3d53bd3ec98（以远端为准）。
+本地提交 SHA：940d7c66cabec7d34dc89618177e91f5143c1fe1（fix：路径与凭据）、6eb23c95aed4f3135931111606ca91aa75c5ef46（docs：README/ARCHITECTURE/TASKS/DECISIONS/STATUS）。
+当前分支、工作区状态、PR：feat/T007-distribution-strategies；PR #7（https://github.com/cppppercy/lan-distribution-lab/pull/7）未合并，HEAD 为 6eb23c95aed4f3135931111606ca91aa75c5ef46（以远端为准）。
 本地提交 SHA：86e1cb80e4ceb17e357ad8392e7d1436ba6eda23（feat：distribution 与 tests）、0969200528c75fd18418c5551b6ae3d53bd3ec98（docs：README/ARCHITECTURE/TASKS/DECISIONS/STATUS）。
-GitHub Actions：PASS（T007 主体提交）— push [run 42763362857](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42763362857/job/129654024200)（1 分 25 秒）、PR [run 42763385090](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42763385090/job/129654093609)（2 分 16 秒）；审核补修的提交推送后需重新确认，最终以 PR #7 Checks 为准，不自动合并。
+GitHub Actions：PASS（T007 主体）— push [run 42763362857](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42763362857/job/129654024200)（1 分 25 秒）、PR [run 42763385090](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42763385090/job/129654093609)（2 分 16 秒）。PASS（审核补修 940d7c6/6eb23c9）— 两次工作流均在 Windows / Python 3.12 成功执行 npm ci、前端测试/构建与 pytest：push [run 42766806859](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42766806859/job/129665095996)（1 分 46 秒）、PR [run 42766812838](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42766812838/job/129665114472)（1 分 32 秒）。本记录自身的文档提交会再次触发工作流，最终状态以 PR #7 Checks 为准；不自动合并。
 ```
 
 ## T006 验证记录（2026-11-09）
