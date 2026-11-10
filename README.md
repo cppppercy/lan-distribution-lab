@@ -169,7 +169,7 @@ python -m lan_distribution_lab experiment `
 
 `--pair` 会无回显地依次要求输入 3 个一次性配对码，所得 Bearer token 仅在这次进程内存中复用，不写入命令行、日志或导出文件。若调用方已安全管理 stdin，也可用 `--tokens-stdin` 提供恰好 N 行不同 token。`--file-id` 可重复指定（最多 4 个）；客户端最多 8 个、轮次最多 10、总 trial 最多 100。`controlled` 才允许 `--max-concurrent`，取值必须在 1..客户端数内。
 
-输出目录必须是从未存在的新目录，结构固定为 `experiments.json`、`trials.csv`、`clients.csv` 和 `trials/trial-<序号>/distribution-result.json`（成功 trial 的原始 `DistributionRun`）。`trials.csv` 的 `application_payload_bytes` 是成功客户端数 × 文件大小，`application_payload_throughput_Bps` 是该值除以批次 `duration_seconds`，只表示应用层有效载荷/批次墙钟时间，**不是**链路带宽。`experiments.json` 含环境标签、Git/Python/平台、试验索引和按策略的描述性统计；成功率使用全部 trial，时间/吞吐量统计只使用完全成功的 trial。失败、取消和 Ctrl+C 已完成前的 trial 会保留安全错误类别，默认继续后续 trial；`--on-error stop` 则把后续计划标记为取消。真实 Wi-Fi/设备验证步骤与数据字典见 [实验记录](docs/EXPERIMENTS.md)。
+输出目录必须是从未存在的新目录，结构固定为 `experiments.json`、`trials.csv`、`clients.csv` 和 `trials/trial-<序号>/distribution-result.json`（成功 trial 的原始 `DistributionRun`）。`trials.csv` 的 `application_payload_bytes` 是成功客户端数 × 文件大小，`application_payload_throughput_Bps` 是该值除以批次 `duration_seconds`，只表示应用层有效载荷/批次墙钟时间，**不是**链路带宽。`experiments.json` 含环境标签、Git/Python/平台、试验索引和按策略的描述性统计；成功率使用全部 trial，时间/吞吐量统计只使用完全成功的 trial。**只有全部计划 trial 均成功时整体 `state` 才为 `completed`，且 CLI 返回 0。**continue 模式会继续后续轮次，但任一失败会使整体为 `completed_with_failures` 并返回非零；stop 模式会把未开始轮次标为取消，整体为 `completed_with_cancelled_trials` 并返回非零。两种非完整成功情形都会先打印输出目录并保留已生成 JSON/CSV；Ctrl+C 则记录 `interrupted` 并返回 130。真实 Wi-Fi/设备验证步骤与数据字典见 [实验记录](docs/EXPERIMENTS.md)。
 
 ### UDP 局域网发现（T009，可选）
 

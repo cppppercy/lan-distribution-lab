@@ -124,6 +124,35 @@ def test_client_failure_and_failure_trial_are_both_retained(tmp_path: Path) -> N
     assert any(row["error_type"] == "authentication" for row in clients)
 
 
+def test_continue_keeps_later_trials_but_never_marks_partial_batch_completed(tmp_path: Path) -> None:
+    origin = FakeOrigin(b"continue-state" * 100)
+    calls = 0
+
+    def success_failure_success(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ExperimentError("controlled second-trial failure")
+        return experiment_module.run_distribution(*args, **kwargs)
+
+    try:
+        output_dir = prepare_experiment_directory(tmp_path / "continue-state")
+        root = ExperimentRunner(
+            _config(server=origin.origin, clients=1, rounds=3),
+            ["continue-token"], output_dir, distribution_runner=success_failure_success,
+        ).run()
+    finally:
+        origin.close()
+
+    manifest = json.loads((root / "experiments.json").read_text(encoding="utf-8"))
+    trials = list(csv.DictReader((root / "trials.csv").open(encoding="utf-8")))
+    assert manifest["state"] == "completed_with_failures"
+    assert [row["state"] for row in trials] == ["completed", "failed", "completed"]
+    assert (root / "trials" / "trial-001" / "distribution-result.json").exists()
+    assert (root / "trials" / "trial-003" / "distribution-result.json").exists()
+    assert not (root / "trials" / "trial-002" / "distribution-result.json").exists()
+
+
 def test_stop_policy_marks_remaining_trials_cancelled(tmp_path: Path) -> None:
     def fail_once(*_args, **_kwargs):
         raise ExperimentError("no server")
@@ -227,6 +256,33 @@ def test_cli_runs_a_fresh_experiment_from_protected_stdin(
     finally:
         origin.close()
     output = capsys.readouterr().out
-    assert "finished" in output
+    assert "state=completed" in output
     assert "cli-one" not in output and "cli-two" not in output
+    assert (destination / "trials" / "trial-001" / "distribution-result.json").exists()
+
+
+def test_cli_stop_returns_nonzero_and_keeps_failed_and_cancelled_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    origin = FakeOrigin(b"stop-state" * 100, valid_tokens={"good"})
+    destination = tmp_path / "stop-cli"
+    try:
+        monkeypatch.setattr(sys, "stdin", io.StringIO("good\nbad\n"))
+        with pytest.raises(SystemExit) as exit_info:
+            main([
+                "experiment", "--server", origin.origin, "--file-id", FILE_ID,
+                "--strategies", "sequential", "--clients", "2", "--rounds", "2",
+                "--on-error", "stop", "--output-dir", str(destination), "--tokens-stdin",
+            ])
+    finally:
+        origin.close()
+
+    assert exit_info.value.code == 1
+    output = capsys.readouterr()
+    assert str(destination) in output.out
+    assert "completed_with_cancelled_trials" in output.err
+    manifest = json.loads((destination / "experiments.json").read_text(encoding="utf-8"))
+    trials = list(csv.DictReader((destination / "trials.csv").open(encoding="utf-8")))
+    assert manifest["state"] == "completed_with_cancelled_trials"
+    assert [row["state"] for row in trials] == ["completed_with_failures", "cancelled"]
     assert (destination / "trials" / "trial-001" / "distribution-result.json").exists()

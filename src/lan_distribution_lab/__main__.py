@@ -517,8 +517,14 @@ def _run_experiment_command(arguments: argparse.Namespace) -> None:
     except KeyboardInterrupt:
         print("Experiment interrupted; completed trial records were persisted.", file=sys.stderr)
         raise SystemExit(130) from None
-    print(f"Experiment {runner.experiment_id} finished: {output_dir}")
+    print(f"Experiment {runner.experiment_id} state={runner.state}: {output_dir}")
     print("Exports: experiments.json, trials.csv, clients.csv and trials/<trial>/distribution-result.json")
+    if runner.state != "completed":
+        print(
+            f"Experiment is incomplete ({runner.state}); result files were kept at: {output_dir}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 def _record_path(value: Path | None, default: Path) -> Path:

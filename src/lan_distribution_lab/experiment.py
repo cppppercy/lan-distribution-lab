@@ -292,9 +292,19 @@ class ExperimentRunner:
             self.state = "interrupted"
             self._write_exports()
             raise
-        self.state = "completed" if not stopped else "completed_with_cancelled_trials"
+        self.state = self._final_state()
         self._write_exports()
         return self.output_dir
+
+    def _final_state(self) -> str:
+        """Return ``completed`` only for a fully successful planned batch."""
+        if len(self.trial_rows) == len(self.plans) and all(
+            row["state"] == "completed" for row in self.trial_rows
+        ):
+            return "completed"
+        if any(row["state"] == "cancelled" for row in self.trial_rows):
+            return "completed_with_cancelled_trials"
+        return "completed_with_failures"
 
     def _run_one(self, plan: TrialPlan) -> bool:
         trial_dir = self.output_dir / "trials" / f"trial-{plan.ordinal:03d}"
