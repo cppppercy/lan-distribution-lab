@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import csv
+import contextlib
 import hashlib
 import json
+import os
 from pathlib import Path
+import tempfile
 
 import pytest
 
@@ -163,3 +166,106 @@ def test_cli_packet_summary_whitelist_and_no_secret_or_path_leak(tmp_path: Path,
     with pytest.raises(SystemExit) as exit_info:
         main(["analyze", "--input", str(root), "--output-dir", str(tmp_path / "reject"), "--packet-summary", str(packet)])
     assert exit_info.value.code == 1
+
+
+def test_controlled_concurrency_charts_do_not_merge_distinct_servers(tmp_path: Path) -> None:
+    first = _experiment(tmp_path, "server-one", b"same-content" * 100, strategies=("controlled",), max_concurrent=1)
+    second = _experiment(tmp_path, "server-two", b"same-content" * 100, strategies=("controlled",), max_concurrent=2)
+
+    output = analyze_experiments([first, second], tmp_path / "analysis")
+
+    payload = json.loads((output / "analysis.json").read_text(encoding="utf-8"))
+    assert len(payload["conditions"]) == 2
+    assert len({item["comparison_key"]["server_identity"] for item in payload["conditions"]}) == 2
+    assert not list((output / "charts").glob("controlled-concurrency-*.svg"))
+    assert "127.0.0.1" not in json.dumps(payload)
+    assert "127.0.0.1" not in (output / "report.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["unsafe-window", "free-note", "unsupported-rtt", "too-many-observations", "oversized"])
+def test_packet_summary_rejects_untrusted_text_and_oversized_input(tmp_path: Path, kind: str) -> None:
+    root = _experiment(tmp_path, f"packet-{kind}")
+    packet = tmp_path / f"{kind}.json"
+    observation: dict[str, object] = {"window_id": "trial-1", "http_status_counts": {"200": 1}}
+    payload: dict[str, object] = {"schema_version": 1, "observations": [observation]}
+    if kind == "unsafe-window":
+        observation["window_id"] = "C:\\Users\\Cai\\secret-token"
+    elif kind == "free-note":
+        observation["note"] = "Bearer secret"
+    elif kind == "unsupported-rtt":
+        observation["rtt_method"] = "Cookie: secret"
+    elif kind == "too-many-observations":
+        payload["observations"] = [observation] * 101
+    else:
+        observation["window_id"] = "x" * 70_000
+    packet.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AnalysisError):
+        analyze_experiments([root], tmp_path / "analysis", packet_summary=packet)
+
+
+def test_tampered_plan_raw_clients_and_output_inside_input_are_rejected(tmp_path: Path) -> None:
+    root = _experiment(tmp_path, "tampered")
+    manifest_path = root / "experiments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["trials"][1]["path"] = manifest["trials"][0]["path"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(AnalysisError, match="that trial"):
+        load_experiment(root)
+
+    root = _experiment(tmp_path, "raw-client")
+    raw_path = root / "trials" / "trial-001" / "distribution-result.json"
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw["clients"][0]["status"] = "failed"
+    raw_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(AnalysisError, match="client status"):
+        load_experiment(root)
+
+    root = _experiment(tmp_path, "inside")
+    with pytest.raises(AnalysisError, match="inside"):
+        analyze_experiments([root], root / "analysis")
+    assert not (root / "analysis").exists()
+
+
+def test_unverified_success_and_duplicate_plan_combination_are_rejected(tmp_path: Path) -> None:
+    root = _experiment(tmp_path, "unverified")
+    def unverified(rows):
+        rows[0]["integrity_verified"] = "False"
+    _rewrite_csv(root / "clients.csv", unverified)
+    with pytest.raises(AnalysisError, match="verified integrity"):
+        load_experiment(root)
+
+    root = _experiment(tmp_path, "plan-duplicate")
+    def duplicate_plan(rows):
+        rows[1]["strategy"] = rows[0]["strategy"]
+    _rewrite_csv(root / "trials.csv", duplicate_plan)
+    with pytest.raises(AnalysisError, match="exactly once"):
+        load_experiment(root)
+
+
+@pytest.mark.parametrize("kind", ["absolute", "relative"])
+def test_output_inside_input_rejects_absolute_and_relative_aliases(tmp_path: Path, kind: str) -> None:
+    # On Windows a path on C: cannot be made relative to this D: checkout. Use
+    # a disposable directory on the checkout volume for the relative alias.
+    base_context = contextlib.nullcontext(tmp_path) if kind == "absolute" else tempfile.TemporaryDirectory(dir=Path.cwd())
+    with base_context as base_value:
+        root = _experiment(Path(base_value), f"output-{kind}")
+        expected = root / f"{kind}-analysis"
+        output = expected if kind == "absolute" else Path(os.path.relpath(expected, Path.cwd()))
+
+        with pytest.raises(AnalysisError, match="inside"):
+            analyze_experiments([root], output)
+        assert not expected.exists()
+
+
+def test_output_inside_input_rejects_symbolic_link_alias(tmp_path: Path) -> None:
+    root = _experiment(tmp_path, "output-symlink")
+    alias = tmp_path / "experiment-alias"
+    try:
+        alias.symlink_to(root, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symbolic links are unavailable in this Windows test environment: {error}")
+
+    with pytest.raises(AnalysisError, match="inside"):
+        analyze_experiments([alias], alias / "analysis")
+    assert not (root / "analysis").exists()

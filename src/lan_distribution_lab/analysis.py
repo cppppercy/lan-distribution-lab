@@ -9,6 +9,7 @@ created, so a polished report can never disguise malformed observations.
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import json
 import math
@@ -27,6 +28,13 @@ ANALYSIS_SCHEMA_VERSION = 1
 SUPPORTED_EXPERIMENT_SCHEMA = {1}
 SUPPORTED_DISTRIBUTION_SCHEMA = {1, 2}
 CHART_METRICS = ("duration", "throughput", "success", "controlled", "client-timing")
+MAX_PACKET_SUMMARY_BYTES = 64 * 1024
+MAX_PACKET_OBSERVATIONS = 100
+_RTT_METHODS = {
+    "Wireshark TCP analysis field": "wireshark_tcp_analysis",
+    "wireshark_tcp_analysis": "wireshark_tcp_analysis",
+    "wireshark_tcp_stream_graph": "wireshark_tcp_stream_graph",
+}
 
 
 class AnalysisError(ValueError):
@@ -37,6 +45,7 @@ class AnalysisError(ValueError):
 class Trial:
     experiment_id: str
     trial_id: str
+    ordinal: int
     round_number: int
     strategy: str
     file_id: str
@@ -91,6 +100,7 @@ def analyze_experiments(
     if not inputs:
         raise AnalysisError("At least one experiment input directory is required.")
     selected = _validate_metrics(metrics)
+    _validate_output_outside_inputs(inputs, output_dir)
     destination = _prepare_new_directory(output_dir)
     try:
         experiments = tuple(load_experiment(Path(value)) for value in inputs)
@@ -147,7 +157,6 @@ def build_analysis(
     """Create only descriptive summaries; never rank incomparable conditions."""
     conditions: dict[tuple[Any, ...], list[Trial]] = defaultdict(list)
     client_map: dict[str, list[Client]] = defaultdict(list)
-    experiment_lookup = {experiment.experiment_id: experiment for experiment in experiments}
     for experiment in experiments:
         for trial in experiment.trials:
             conditions[_comparison_key(experiment, trial)].append(trial)
@@ -266,6 +275,7 @@ def _load_trials(path: Path, experiment_id: str, index: list[Any], configuration
         index_by_id[trial_id] = item
     trials: list[Trial] = []
     seen: set[str] = set()
+    plan_keys: set[tuple[int, str, str]] = set()
     for row in rows:
         if row["experiment_id"] != experiment_id:
             raise AnalysisError("trials.csv experiment_id does not match experiments.json.")
@@ -279,8 +289,12 @@ def _load_trials(path: Path, experiment_id: str, index: list[Any], configuration
         file_id = _csv_uuid(row, "file_id", "trials.csv")
         if file_id not in configuration["file_ids"]:
             raise AnalysisError("trials.csv contains an unplanned file_id.")
+        item = index_by_id.get(trial_id)
+        if item is None or item.get("state") != row["state"]:
+            raise AnalysisError("Trial state differs between trials.csv and experiments.json index.")
+        ordinal = _required_int(item, "ordinal", "experiments.json trials index", minimum=1)
         trial = Trial(
-            experiment_id, trial_id, _csv_int(row, "round", "trials.csv", minimum=1), strategy, file_id,
+            experiment_id, trial_id, ordinal, _csv_int(row, "round", "trials.csv", minimum=1), strategy, file_id,
             _csv_optional_int(row, "size_bytes", "trials.csv", minimum=0),
             _csv_int(row, "clients", "trials.csv", minimum=1),
             _csv_optional_int(row, "max_concurrent", "trials.csv", minimum=1),
@@ -291,15 +305,26 @@ def _load_trials(path: Path, experiment_id: str, index: list[Any], configuration
             _csv_float(row, "application_payload_throughput_Bps", "trials.csv", minimum=0), row["state"], None,
         )
         _validate_trial(trial, configuration)
-        item = index_by_id.get(trial_id)
-        if item is None or item.get("state") != trial.state:
-            raise AnalysisError("Trial state differs between trials.csv and experiments.json index.")
+        plan_key = (trial.round_number, trial.file_id, trial.strategy)
+        if plan_key in plan_keys:
+            raise AnalysisError("Each round, file_id and strategy combination must occur exactly once.")
+        plan_keys.add(plan_key)
         raw_path = item.get("path")
         if raw_path is not None and (not isinstance(raw_path, str) or not raw_path):
             raise AnalysisError("Manifest raw trial path is invalid.")
         trials.append(replace(trial, raw_path=raw_path))
     if set(index_by_id) != seen:
         raise AnalysisError("Manifest trials index and trials.csv use different trial_id values.")
+    expected_keys = {
+        (round_number, file_id, strategy)
+        for round_number in range(1, configuration["rounds"] + 1)
+        for file_id in configuration["file_ids"]
+        for strategy in configuration["strategies"]
+    }
+    if plan_keys != expected_keys:
+        raise AnalysisError("trials.csv does not cover every planned round, file_id and strategy exactly once.")
+    if len({trial.ordinal for trial in trials}) != len(trials):
+        raise AnalysisError("Manifest trials index contains duplicate ordinal values.")
     return trials
 
 
@@ -342,6 +367,10 @@ def _validate_trial_client_consistency(trials: Sequence[Trial], clients: Sequenc
         counts = {name: sum(row.status == name for row in rows) for name in ("succeeded", "failed", "cancelled")}
         if counts != {"succeeded": trial.succeeded, "failed": trial.failed, "cancelled": trial.cancelled}:
             raise AnalysisError("Client status counts differ from trials.csv.")
+        if any(row.status == "succeeded" and not row.integrity_verified for row in rows):
+            raise AnalysisError("A successful client must have verified integrity.")
+        if any(row.status != "succeeded" and row.integrity_verified for row in rows):
+            raise AnalysisError("A failed or cancelled client cannot claim verified integrity.")
         if trial.state == "completed" and (trial.duration_seconds <= 0 or not all(row.integrity_verified for row in rows)):
             raise AnalysisError("A completed trial needs positive duration and verified successful clients.")
 
@@ -351,15 +380,17 @@ def _validate_raw_records(root: Path, trials: Sequence[Trial], clients: Sequence
     for client in clients:
         clients_by_trial[client.trial_id].append(client)
     hashes: dict[str, str] = {}
+    used_raw_paths: set[Path] = set()
     for trial in trials:
         if trial.raw_path is None:
             if trial.state in {"completed", "completed_with_failures"}:
                 raise AnalysisError("A run that reached distribution must retain its raw DistributionRun JSON.")
             continue
-        relative = Path(trial.raw_path)
-        if relative.is_absolute() or ".." in relative.parts:
-            raise AnalysisError("Manifest raw path escapes the experiment directory.")
-        raw = _read_json(root / relative, "raw DistributionRun JSON")
+        raw_path = _safe_raw_path(root, trial)
+        if raw_path in used_raw_paths:
+            raise AnalysisError("Two trials must not reference the same raw DistributionRun JSON.")
+        used_raw_paths.add(raw_path)
+        raw = _read_json(raw_path, "raw DistributionRun JSON")
         if not isinstance(raw, dict) or _required_int(raw, "schema_version", "raw DistributionRun JSON", minimum=1) not in SUPPORTED_DISTRIBUTION_SCHEMA:
             raise AnalysisError("Unsupported raw DistributionRun JSON schema.")
         if _required_string(raw, "strategy", "raw DistributionRun JSON") != trial.strategy:
@@ -379,8 +410,29 @@ def _validate_raw_records(root: Path, trials: Sequence[Trial], clients: Sequence
         for field, value in (("succeeded", trial.succeeded), ("failed", trial.failed), ("cancelled", trial.cancelled)):
             if _required_int(summary, field, "raw DistributionRun JSON summary", minimum=0) != value:
                 raise AnalysisError("Raw DistributionRun counts do not match trials.csv.")
-        if len(_required_list(raw, "clients", "raw DistributionRun JSON")) != len(clients_by_trial[trial.trial_id]):
+        raw_clients = _required_list(raw, "clients", "raw DistributionRun JSON")
+        csv_clients = {client.client_id: client for client in clients_by_trial[trial.trial_id]}
+        if len(raw_clients) != len(csv_clients):
             raise AnalysisError("Raw DistributionRun client count does not match clients.csv.")
+        raw_by_id: dict[str, dict[str, Any]] = {}
+        for raw_client in raw_clients:
+            if not isinstance(raw_client, dict):
+                raise AnalysisError("Raw DistributionRun clients must be objects.")
+            client_id = _required_string(raw_client, "client_id", "raw DistributionRun client")
+            if client_id in raw_by_id:
+                raise AnalysisError("Raw DistributionRun has duplicate client_id values.")
+            raw_by_id[client_id] = raw_client
+        if set(raw_by_id) != set(csv_clients):
+            raise AnalysisError("Raw DistributionRun client IDs do not match clients.csv.")
+        for client_id, client in csv_clients.items():
+            raw_client = raw_by_id[client_id]
+            if _required_string(raw_client, "status", "raw DistributionRun client") != client.status:
+                raise AnalysisError("Raw DistributionRun client status does not match clients.csv.")
+            if _required_int(raw_client, "downloaded_bytes", "raw DistributionRun client", minimum=0) != client.downloaded_bytes:
+                raise AnalysisError("Raw DistributionRun client bytes do not match clients.csv.")
+            raw_duration = _finite_number(raw_client.get("duration_seconds"), "raw DistributionRun client duration_seconds", positive=False)
+            if not math.isclose(raw_duration, client.duration_seconds, rel_tol=1e-8, abs_tol=1e-9):
+                raise AnalysisError("Raw DistributionRun client duration does not match clients.csv.")
     return hashes
 
 
@@ -430,7 +482,7 @@ def _comparison_key(experiment: ExperimentData, trial: Trial) -> tuple[Any, ...]
     digest = dict(experiment.file_hashes).get(trial.file_id)
     return (
         trial.file_id, digest, trial.size_bytes, trial.clients, experiment.environment_type,
-        config["timeout_seconds"], config["retries"], config.get("server", ""),
+        config["timeout_seconds"], config["retries"], _server_identity(config.get("server")),
         config.get("max_concurrent"),
     )
 
@@ -438,7 +490,7 @@ def _comparison_key(experiment: ExperimentData, trial: Trial) -> tuple[Any, ...]
 def _comparison_key_payload(key: tuple[Any, ...]) -> dict[str, Any]:
     return {
         "file_id": key[0], "content_sha256": key[1], "size_bytes": key[2], "clients": key[3], "environment_type": key[4],
-        "timeout_seconds": key[5], "retries": key[6], "controlled_max_concurrent": key[8],
+        "timeout_seconds": key[5], "retries": key[6], "server_identity": key[7], "controlled_max_concurrent": key[8],
     }
 
 
@@ -504,7 +556,7 @@ def _controlled_charts(destination: Path, report: dict[str, Any]) -> list[str]:
             caps = summary["configured_max_concurrent_values"]
             value = summary["batch_duration_seconds_completed_trials"]["mean"]
             if len(caps) == 1 and value is not None:
-                groups[(key["file_id"], key["content_sha256"], key["size_bytes"], key["clients"], key["environment_type"], key["timeout_seconds"], key["retries"])].append((caps[0], float(value), int(summary["batch_duration_seconds_completed_trials"]["samples"])))
+                groups[(key["file_id"], key["content_sha256"], key["size_bytes"], key["clients"], key["environment_type"], key["timeout_seconds"], key["retries"], key["server_identity"])].append((caps[0], float(value), int(summary["batch_duration_seconds_completed_trials"]["samples"])))
     paths: list[str] = []
     for number, values in enumerate(groups.values(), start=1):
         unique = {cap for cap, _, _ in values}
@@ -583,26 +635,45 @@ def _packet_markdown(packet: dict[str, Any]) -> str:
 
 
 def _load_packet_summary(path: Path) -> dict[str, Any]:
-    payload = _read_json(path, "packet summary")
+    summary_path = Path(path).expanduser().resolve(strict=False)
+    try:
+        if summary_path.stat().st_size > MAX_PACKET_SUMMARY_BYTES:
+            raise AnalysisError("packet summary exceeds the 64 KiB safety limit.")
+    except OSError as error:
+        raise AnalysisError("Could not read packet summary.") from error
+    payload = _read_json(summary_path, "packet summary")
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         raise AnalysisError("packet summary must be a schema_version 1 JSON object.")
     observations = _required_list(payload, "observations", "packet summary")
+    if len(observations) > MAX_PACKET_OBSERVATIONS:
+        raise AnalysisError("packet summary has too many observations.")
     cleaned = []
     for observation in observations:
         if not isinstance(observation, dict):
             raise AnalysisError("packet summary observations must be objects.")
-        allowed = {"window_id", "http_status_counts", "tcp_retransmission_packets", "rtt_method", "rtt_seconds", "note"}
+        allowed = {"window_id", "http_status_counts", "tcp_retransmission_packets", "rtt_method", "rtt_seconds"}
         if set(observation) - allowed:
             raise AnalysisError("packet summary contains a field outside the privacy whitelist.")
-        entry = {key: observation[key] for key in allowed if key in observation}
-        if "http_status_counts" in entry:
-            counts = entry["http_status_counts"]
+        window_id = _required_string(observation, "window_id", "packet summary observation")
+        if len(window_id) > 64 or not _is_safe_identifier(window_id):
+            raise AnalysisError("packet summary window_id must be a short safe identifier.")
+        entry = {"window_id": window_id}
+        if "http_status_counts" in observation:
+            counts = observation["http_status_counts"]
             if not isinstance(counts, dict) or any(str(code) not in {"200", "206", "416"} or not isinstance(count, int) or count < 0 for code, count in counts.items()):
                 raise AnalysisError("packet summary HTTP status counts are invalid.")
-        if "tcp_retransmission_packets" in entry and (not isinstance(entry["tcp_retransmission_packets"], int) or entry["tcp_retransmission_packets"] < 0):
+        if "tcp_retransmission_packets" in observation and (not isinstance(observation["tcp_retransmission_packets"], int) or observation["tcp_retransmission_packets"] < 0):
             raise AnalysisError("packet summary retransmission count is invalid.")
-        if "rtt_seconds" in entry:
-            _finite_number(entry["rtt_seconds"], "packet summary rtt_seconds", positive=False)
+        if "rtt_seconds" in observation:
+            _finite_number(observation["rtt_seconds"], "packet summary rtt_seconds", positive=False)
+        if "rtt_method" in observation:
+            method = observation["rtt_method"]
+            if not isinstance(method, str) or method not in _RTT_METHODS:
+                raise AnalysisError("packet summary rtt_method is unsupported.")
+            entry["rtt_method"] = _RTT_METHODS[method]
+        for key in ("http_status_counts", "tcp_retransmission_packets", "rtt_seconds"):
+            if key in observation:
+                entry[key] = observation[key]
         cleaned.append(entry)
     return {"status": "provided", "observations": cleaned, "note": "Optional offline, sanitized packet summary; no PCAP was read or uploaded."}
 
@@ -616,6 +687,36 @@ def _read_json(path: Path, label: str) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise AnalysisError(f"Could not read valid {label}.") from error
+
+
+def _safe_raw_path(root: Path, trial: Trial) -> Path:
+    expected_relative = Path("trials") / f"trial-{trial.ordinal:03d}" / "distribution-result.json"
+    if trial.raw_path != expected_relative.as_posix():
+        raise AnalysisError("Manifest raw path must name that trial's distribution-result.json.")
+    candidate = root / expected_relative
+    trial_directory = root / "trials" / f"trial-{trial.ordinal:03d}"
+    try:
+        if any(path.is_symlink() for path in (root / "trials", trial_directory, candidate)):
+            raise AnalysisError("Raw DistributionRun path must not use symbolic links.")
+        resolved_directory = trial_directory.resolve(strict=True)
+        resolved_candidate = candidate.resolve(strict=True)
+        if resolved_candidate.parent != resolved_directory or resolved_candidate.name != "distribution-result.json":
+            raise AnalysisError("Raw DistributionRun path escapes its trial directory.")
+        return resolved_candidate
+    except OSError as error:
+        raise AnalysisError("Could not safely resolve raw DistributionRun path.") from error
+
+
+def _server_identity(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise AnalysisError("configuration.server is required for comparable analysis.")
+    # Keep the raw LAN address out of public JSON/Markdown while retaining a
+    # deterministic comparison key for identical origins in this report.
+    return "origin-sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _is_safe_identifier(value: str) -> bool:
+    return bool(value) and value[0].isalnum() and all(character.isalnum() or character in "._-" for character in value)
 
 
 def _read_csv(path: Path, label: str) -> list[dict[str, str]]:
@@ -729,6 +830,17 @@ def _prepare_new_directory(value: Path) -> Path:
     except OSError as error:
         raise AnalysisError("Could not create analysis output directory.") from error
     return destination
+
+
+def _validate_output_outside_inputs(inputs: Sequence[Path], output_dir: Path) -> None:
+    destination = Path(output_dir).expanduser().resolve(strict=False)
+    for source_value in inputs:
+        source = Path(source_value).expanduser().resolve(strict=False)
+        try:
+            destination.relative_to(source)
+        except ValueError:
+            continue
+        raise AnalysisError("Analysis output directory must not be inside an input experiment directory.")
 
 
 def _remove_created_tree(root: Path) -> None:

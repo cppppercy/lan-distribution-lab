@@ -48,4 +48,4 @@ Wireshark 的 TCP RTT 图或字段必须标记其具体工具/字段和会话范
 }
 ```
 
-分析器拒绝未列入白名单的字段，尤其是认证头、Cookie、IP、文件路径和载荷。缺少摘要时报告明确显示“没有抓包证据”，不会杜撰 TCP/HTTP 结论。
+分析器拒绝未列入白名单的字段，尤其是认证头、Cookie、IP、文件路径、自由文本 `note` 和载荷。摘要文件上限为 64 KiB、最多 100 条 observation；`window_id` 必须是最多 64 字符的字母数字/`.`/`_`/`-` 标识符，`rtt_method` 仅接受 `wireshark_tcp_analysis`、`wireshark_tcp_stream_graph`（兼容旧的 `Wireshark TCP analysis field` 后会规范化）。缺少摘要时报告明确显示“没有抓包证据”，不会杜撰 TCP/HTTP 结论。

@@ -173,21 +173,21 @@ python -m lan_distribution_lab experiment `
 
 ### 实验数据分析与图表（T011）
 
-`analyze` 只读校验一个或多个 T010 结果目录，再在**全新**输出目录写入 `analysis.json`、`report.md` 和静态 SVG 图表；不会改写输入 CSV/JSON，也不读取或上传 PCAP。格式、trial/client 计数、原始 DistributionRun、有限数值和状态必须一致；不完整或不兼容的数据会明确失败，不生成看似可信的图。
+`analyze` 只读校验一个或多个 T010 结果目录，再在**全新**输出目录写入 `analysis.json`、`report.md` 和静态 SVG 图表；不会改写输入 CSV/JSON，也不读取或上传 PCAP。输出目录不得位于任一输入目录内（包括绝对、相对和可解析的符号链接别名），否则会在创建目录前拒绝。计划中的每个 `round × file_id × strategy` 必须恰好出现一次；每份原始 `DistributionRun` 必须唯一且位于对应 `trial-<序号>` 目录。格式、trial/client 计数、原始 DistributionRun、有限数值和状态必须一致；不完整或不兼容的数据会明确失败，不生成看似可信的图。
 
 ```powershell
 python -m lan_distribution_lab analyze `
   --input .\experiments\exp-20261110-local-001 `
   --output-dir .\analysis\report-001
 
-# 多个结果目录仅在相同文件版本、客户端数、环境、超时/重试等可比条件内分别汇总
+# 多个结果目录仅在相同文件版本、客户端数、环境、超时/重试和脱敏服务器身份等可比条件内分别汇总
 python -m lan_distribution_lab analyze `
   --input .\experiments\run-a --input .\experiments\run-b `
   --metrics duration,throughput,success,controlled,client-timing `
   --output-dir .\analysis\comparison-001
 ```
 
-报告按策略展示完整成功率（分母含失败/取消）、成功 trial 的批次时间和应用层有效吞吐量（MiB/s，1024 进制）、controlled 的上限/观测活跃数、客户端排队/执行时间，以及在数据足够时的 Jain 公平性。吞吐量不是 TCP/NIC 带宽，逻辑客户端也不是独立无线设备；报告不生成因果或显著性结论。未提供抓包摘要时会明确写为“没有抓包证据”。可选 `--packet-summary` 只接受脱敏 schema-v1 JSON 白名单字段；Windows/Wireshark 操作、过滤器和隐私处理见 [抓包证据指南](docs/PACKET_CAPTURE_GUIDE.md)。
+报告按策略展示完整成功率（分母含失败/取消）、成功 trial 的批次时间和应用层有效吞吐量（MiB/s，1024 进制）、controlled 的上限/观测活跃数、客户端排队/执行时间，以及在数据足够时的 Jain 公平性。跨服务器或无法证明相同实验环境的 controlled 上限不会合并为对照；报告只给出稳定的脱敏服务器摘要，不回显地址。吞吐量不是 TCP/NIC 带宽，逻辑客户端也不是独立无线设备；报告不生成因果或显著性结论。未提供抓包摘要时会明确写为“没有抓包证据”。可选 `--packet-summary` 只接受有大小、数量和字段值限制的脱敏 schema-v1 JSON 白名单字段；Windows/Wireshark 操作、过滤器和隐私处理见 [抓包证据指南](docs/PACKET_CAPTURE_GUIDE.md)。
 
 ### UDP 局域网发现（T009，可选）
 

@@ -159,9 +159,9 @@
 
 ### T011（网络实验分析、性能图表与抓包证据整理）
 
-**完成内容（待审查）**：新增 `python -m lan_distribution_lab analyze` 与标准库分析模块。它只读校验 T010 的 `experiments.json`、两份 CSV 及存在的原始 `DistributionRun`，拒绝不支持版本、重复/矛盾 ID、无效数值、状态/计数冲突与不完整成功记录；仅在可比条件内分别汇总 sequential、parallel、controlled，并生成结构化 JSON、Markdown、带标题/单位/样本量的 SVG。可选抓包输入只接受脱敏字段白名单摘要，抓包操作与隐私边界见 `docs/PACKET_CAPTURE_GUIDE.md`。
+**完成内容（待审查）**：新增 `python -m lan_distribution_lab analyze` 与标准库分析模块。它只读校验 T010 的 `experiments.json`、两份 CSV 及存在的原始 `DistributionRun`，要求每个计划 `round × file_id × strategy` 恰好一次、原始记录唯一且严格位于对应 trial 目录，并拒绝不支持版本、重复/矛盾 ID、无效数值、状态/计数冲突与不完整成功记录；仅在包含脱敏服务器身份的可比条件内分别汇总 sequential、parallel、controlled，并生成结构化 JSON、Markdown、带标题/单位/样本量的 SVG。可选抓包输入只接受受限大小/数量、脱敏字段和值白名单摘要，抓包操作与隐私边界见 `docs/PACKET_CAPTURE_GUIDE.md`。
 
-**验收边界**：完成率包含失败/取消，时间与应用层有效吞吐量仅用完整成功 trial；MiB/s 为 1024 进制，不等同 TCP/NIC 带宽。Jain 指数只用同一完整 trial 成功客户端的应用层完成速率，样本不足明确 unavailable。输入目录从不被修改；没有 packet summary 时报告明确无包级证据；不同文件/环境/客户端数/超时等不被合并为策略优劣结论。
+**验收边界**：完成率包含失败/取消，时间与应用层有效吞吐量仅用完整成功 trial；MiB/s 为 1024 进制，不等同 TCP/NIC 带宽。Jain 指数只用同一完整 trial 成功客户端的应用层完成速率，样本不足明确 unavailable。输入目录从不被修改，分析输出也不得置于输入树中；没有 packet summary 时报告明确无包级证据；不同服务器、文件/环境/客户端数/超时等不被合并为策略优劣结论。
 
 **真实验证**：NOT_RUN — 不在本任务自动抓包或执行手机、平板、Wi-Fi/热点、校园网、断线和真实 G4 实验。T011 自动化 fixture 明确是 synthetic test fixture，不能作为课程性能结果。
 
