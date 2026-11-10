@@ -1,7 +1,7 @@
 # 当前项目状态
 
 **更新日期**：2026-11-10
-**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 的 Python CLI 安全续传已在审核补修后合并（PR #6）；T007 多客户端顺序/并发分发与本机运行记录已实现，等待 PR 审查。
+**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 的 Python CLI 安全续传已在审核补修后合并（PR #6）；T007 多客户端顺序/并发分发与运行记录已合并（PR #7）；T008 受控并发调度（controlled）与 SQLite 迁移已实现，等待 PR 审查。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -10,7 +10,7 @@
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
-- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，待审查）**；设备发现、P2P：**NOT_IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，待审查）**；设备发现、P2P：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
@@ -24,8 +24,26 @@
 - **T004 — IN_PROGRESS**：Vue Web、同源静态托管、Cookie 集成、显式私有 IPv4 LAN 启动及自动选址启动脚本已实现；手机热点基础互传已验证，平板、SHA-256 对照和断线等 G1 人工项目待补验。
 - **T005 — DONE**：单 Range、强 ETag If-Range、范围任务语义和自动化边界测试已合并至 main。
 - **T006 — DONE**：Python CLI `.part`/无秘密状态、Range/If-Range 恢复、强响应校验、SHA-256 发布、自动化故障测试与 2026-11-10 审核补修已完成；PR #6 已合并至 main（合并提交 `dbe69d116fb6ecf15b0b7d1c9dae842d3b2c5a55`）。
-- **T007 — IN_PROGRESS**：`python -m lan_distribution_lab distribute` 控制器、sequential/parallel 策略、每客户端独立凭据与独立输出、运行级 JSON 与独立 SQLite 分发记录、16 项本机自动化测试已实现；等待 PR 审查。
-- 下一关卡：T007 审查通过后可进入 T008；T004 的剩余真实设备项目仍须如实补验。
+- **T007 — DONE**：`python -m lan_distribution_lab distribute` 控制器、sequential/parallel 策略、每客户端独立凭据与独立输出、运行级 JSON 与独立 SQLite 分发记录、审核补修已完成；PR #7 已合并至 main（合并提交 `155462e5324f915645f490b02847fa3a5e46addf`）。
+- **T008 — IN_PROGRESS**：新增 controlled 固定并发策略（`--max-concurrent`）、FIFO 排队、等待/执行/批次计时拆分、JSON schema v2、T007 SQLite 原地迁移与 11 项新测试已实现；等待 PR 审查。
+- 下一关卡：T008 审查通过后可进入 T009；T004 的剩余真实设备项目仍须如实补验。
+
+## T008 验证记录（2026-11-10）
+
+```text
+任务：T008 — 受控并发调度与实验入口
+基线分支与起点 SHA：feat/T008-controlled-concurrency @ 155462e5324f915645f490b02847fa3a5e46addf（PR #7 合并后的 main）
+实际代码变化：
+  distribution.py 新增 controlled 策略：按 FIFO 顺序提交到 max_concurrent 个工作者的 ThreadPoolExecutor，上限必须为 1..参与客户端数且不超过安全上限；一个任务结束后自动接纳下一个等待任务；sequential/parallel 行为与参数保持不变。新增 _ActiveCounter 记录观测最大活跃任务数，ClientResult 新增 queued_at/wait_seconds，DistributionRun 新增 max_concurrent/observed_max_active；客户端执行时间与排队等待分开记录，批次总耗时仍为运行级 duration_seconds，均使用 time.monotonic()。
+  distribution_store.py 支持三种 strategy：T007 旧库原地迁移（重建 distribution_runs 以放宽 strategy CHECK 并保留历史行；distribution_clients 增加 queued_at/wait_seconds 列），重复打开/迁移幂等，不删除数据库、不丢失历史数据。
+  __main__.py 新增 --max-concurrent：仅 controlled 有效，缺失/0/负数/超过客户端数/超过安全上限/误用于其他策略时在下载开始前报错；CLI 输出调度配置与观测并发。
+  JSON schema_version 升为 2，新增 scheduling 与客户端等待字段；v1 字段语义不变（加法扩展）。
+测试：PASS — tests/test_distribution.py 37 passed（T008 新增 11 项）：5 客户端/上限 2 时服务端在途请求计数从不 >2 且实际达到 2；上限 1 严格 FIFO 且等待时间递增；上限等于客户端数时全部并发；参数边界与策略误用拒绝；失败客户端不阻塞等待任务；真实 uvicorn 服务器独立会话与输出 SHA-256；JSON/SQLite 计时与调度字段自洽且无 token/私人路径；T007 旧数据库迁移后写入 controlled 且历史保留；T007 sequential/parallel 与 T006 续传回归。
+完整回归：`python -m compileall -q src tests` 通过；`python -m pytest`（Python 3.13.7：125 passed, 1 skipped, 1 warning in 38.63s）；`python -m pip check`、`npm --prefix web run test`（2 passed）、`npm --prefix web run build`、`git diff --check` 见下方 CI/验收更新。
+真实设备/网络：NOT_RUN — 受控并发测试使用本机受控 HTTP 服务与真实本机 uvicorn 会话，不是手机、平板或真实 Wi-Fi 的性能实验。
+已知限制：仅固定并发窗口，不实现动态窗口/自适应速率/优先级（超出 T008 范围）；观测最大活跃数仅在控制器进程内可靠测量；并发上限 8 与服务端槽位/磁盘限制共同约束；HTTP 无 TLS；Windows ACL 与断电一致性未实测。
+当前分支、工作区状态、PR：feat/T008-controlled-concurrency；本地提交与 GitHub Actions 结果见本记录后续更新。
+```
 
 ## T006 审核补修记录（2026-11-10）
 
@@ -64,6 +82,7 @@ GitHub Actions：PASS — 上述提交推送后的两次工作流均在 Windows 
 当前分支、工作区状态、PR：feat/T007-distribution-strategies；PR #7（https://github.com/cppppercy/lan-distribution-lab/pull/7）未合并，HEAD 为 6eb23c95aed4f3135931111606ca91aa75c5ef46（以远端为准）。
 本地提交 SHA：86e1cb80e4ceb17e357ad8392e7d1436ba6eda23（feat：distribution 与 tests）、0969200528c75fd18418c5551b6ae3d53bd3ec98（docs：README/ARCHITECTURE/TASKS/DECISIONS/STATUS）。
 GitHub Actions：PASS（T007 主体）— push [run 42763362857](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42763362857/job/129654024200)（1 分 25 秒）、PR [run 42763385090](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42763385090/job/129654093609)（2 分 16 秒）。PASS（审核补修 940d7c6/6eb23c9）— 两次工作流均在 Windows / Python 3.12 成功执行 npm ci、前端测试/构建与 pytest：push [run 42766806859](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42766806859/job/129665095996)（1 分 46 秒）、PR [run 42766812838](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42766812838/job/129665114472)（1 分 32 秒）。本记录自身的文档提交会再次触发工作流，最终状态以 PR #7 Checks 为准；不自动合并。
+合并状态（2026-11-10）：PR #7 已由用户合并至 main，合并提交 155462e5324f915645f490b02847fa3a5e46addf；T007 状态更新为 DONE。
 ```
 
 ## T006 验证记录（2026-11-09）

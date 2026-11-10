@@ -16,8 +16,8 @@
 | T004 | IN_PROGRESS | Vue 响应式界面、同源静态托管、显式 LAN 启动和 Windows 自动选址启动脚本已实现；手机热点基础互传已验证，G1 剩余人工项目待补验 | G1 | T003 |
 | T005 | DONE | 单 HTTP Range、If-Range 版本保护、范围任务语义与边界测试已合并 | G2 | T003 |
 | T006 | DONE | Python CLI 断点续传、失败恢复、完整性验证已实现；审核补修后 PR #6 已合并 | G2 | T005 |
-| T007 | IN_PROGRESS | 多客户端顺序/并发分发、独立会话任务记录与 JSON/SQLite 运行记录已实现；等待 PR 审查 | G3 | T006 |
-| T008 | TODO | 受控并发策略与调度实验入口 | G3 | T007 |
+| T007 | DONE | 多客户端顺序/并发分发、独立会话任务记录与 JSON/SQLite 运行记录已实现；审核补修后 PR #7 已合并 | G3 | T006 |
+| T008 | IN_PROGRESS | 受控并发调度（controlled、--max-concurrent）、调度记录与 SQLite 迁移已实现；等待 PR 审查 | G3 | T007 |
 | T009 | TODO | UDP 桌面发现、连接回退及设备授权体验 | G3 | G1 稳定后 |
 | T010 | TODO | 自动化实验驱动、数据记录、真实设备测试 | G4 | T008 |
 | T011 | TODO | 抓包与网络理论分析、性能图表和局限性评估 | G4 | T010 |
@@ -121,7 +121,19 @@
 
 **审核补修（2026-11-10，待 PR#7 复审）**：(1) 分发记录路径安全——在下载启动前用规范化路径（解析 `..`、符号链接别名、Windows 大小写折叠）校验 `--results`、`--records` 与每个客户端目标、`.part`、`.part.json`；结果 JSON 与 SQLite 记录不得同路径，任一记录路径与客户端工件冲突则提前失败，不启动下载、不写结果、不改变已有文件；`write_result_json()` 额外接受受保护路径并在原子替换前拒绝覆盖；SQLite 记录只追加、不覆盖已有运行。(2) 独立凭据——同一次分发中的多个客户端必须使用不同 Bearer Token，重复凭据在启动下载前拒绝且错误信息不含 token 原文；`--pair` 继续为每个逻辑客户端使用独立的一次性配对码。新增 10 项回归测试（含预置文件的非法结果路径、Windows 大小写/别名冲突、重复凭据与 CLI 提前失败、结果 JSON 原子替换与 SQLite 追加）。详见 `docs/STATUS.md` 与 ADR-012。
 
-**非目标**：T008 动态调度、优先级、速率控制与受控并发策略；UDP 发现、P2P、上传续传、浏览器后台续传、真实设备多端分发实验与正式性能图表。
+**合并状态（2026-11-10）**：PR #7 在审核补修与 CI 通过后已合并至 main，合并提交 `155462e5324f915645f490b02847fa3a5e46addf`；T007 状态更新为 DONE。
+
+### T008（受控并发调度与实验入口）
+
+**完成内容（待审查）**：在 `distribute` 中新增第三种策略 `controlled`。它把客户端任务按确定性 FIFO 顺序提交给固定 `max_concurrent` 个工作者的 `ThreadPoolExecutor`：同时运行的任务数不超过上限，任务完成后自动接纳下一个等待任务，队列长度受客户端总数（≤ 8）约束。`--max-concurrent N` 仅对 `controlled` 有效，N 必须为 1..参与客户端数且不超过安全上限；缺失、非法或误用于其他策略时在下载开始前返回明确错误。`sequential`/`parallel` 的行为与参数保持向后兼容。
+
+**记录与兼容**：`DistributionRun` 新增配置上限与实际观测最大活跃数，`ClientResult` 新增排队时间戳与等待秒数；客户端执行时间（`duration_seconds`）与排队等待（`wait_seconds`）分开记录，批次总耗时仍为运行级 `duration_seconds`，均使用 `time.monotonic()` 计时、UTC 时间戳。JSON `schema_version` 升为 2 并新增 `scheduling` 与客户端等待字段（v1 字段语义不变，属加法扩展）。SQLite 通过原地迁移支持三种策略：重建 T007 的 `distribution_runs` 表以放宽 strategy CHECK，保留全部历史行，重复打开/迁移幂等；`distribution_clients` 以 `ALTER TABLE ADD COLUMN` 增加等待字段。
+
+**验收证据（本地）**：`tests/test_distribution.py` 共 37 passed，其中 T008 新增 11 项：5 客户端/上限 2 时观测并发不超过 2 且实际达到 2（本机 HTTP 在途请求计数 + 同步屏障）、上限 1 严格 FIFO 顺序与等待时间递增、上限等于客户端数时全部并发完成、参数 0/负数/大于客户端/超过安全上限及误用于其他策略均被拒绝、失败客户端不阻塞等待任务、真实 uvicorn 服务器上独立会话与输出 SHA-256、JSON/SQLite 计时与调度字段自洽、T007 旧数据库迁移后写入 controlled 且历史保留、JSON/SQLite 不含 token 或私人路径、T007 sequential/parallel 与 T006 续传回归。完整套件与 CI 结果见 `docs/STATUS.md`。
+
+**实验入口**：三条策略可在相同文件/客户端数/环境下分别运行并保存独立 JSON 与 SQLite 原始数据，方法见 `docs/EXPERIMENTS.md`；本阶段不生成性能结论。
+
+**非目标**：动态并发窗口、自适应速率控制、优先级调度（不在 T008 固定并发范围内）；T009 UDP 发现、P2P；T010 正式性能实验与图表；上传续传、浏览器后台续传、HTTPS/公网部署、真实设备人工测试。
 
 ### T003 及后续任务共同模板
 

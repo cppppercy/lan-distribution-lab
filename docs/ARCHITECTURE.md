@@ -1,6 +1,6 @@
-# 当前架构（T007 多客户端分发）
+# 当前架构（T008 受控并发调度）
 
-**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range、T006 Python CLI 安全续传（已合并）与 T007 多客户端分发控制均已实现并经本机自动化测试/构建验证。T004 已获得手机热点基础收发的用户确认；平板、真实 LAN 断线恢复、真实多设备分发与性能实验仍未验证。UDP、P2P 与 T008 调度未实现。
+**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range、T006 Python CLI 安全续传、T007 多客户端分发（均已合并）与 T008 受控并发调度均已实现并经本机自动化测试/构建验证。T004 已获得手机热点基础收发的用户确认；平板、真实 LAN 断线恢复、真实多设备分发与性能实验仍未验证。UDP、P2P 与动态调度未实现。
 
 ## 组件与数据流
 
@@ -39,8 +39,8 @@ flowchart LR
 | `files.py` | staging 写入、SHA-256、配额/磁盘检查、原子硬链接发布、对象读取和任务记录 |
 | `runtime.py` | 组合服务及上传/下载 `BoundedSemaphore` 槽位 |
 | `client.py` | 标准库 HTTP CLI 客户端；Bearer 内存使用、Range/If-Range 续传、状态验证、SHA-256 与原子发布、元数据预检和鉴权/槽位错误类型 |
-| `distribution.py` | 控制器侧多客户端编排：独立凭据与输出、sequential/parallel、单调时钟计时、JSON 结果与安全错误分类 |
-| `distribution_store.py` | 控制器侧独立 SQLite 分发运行记录（runs/clients），不触碰服务端状态 |
+| `distribution.py` | 控制器侧多客户端编排：顺序、普通并发与固定上限受控并发；独立凭据与输出、FIFO 排队、等待/执行计时、JSON 结果与安全错误分类 |
+| `distribution_store.py` | 控制器侧独立 SQLite 分发运行记录（runs/clients），支持 T007 库原地迁移到三种策略且保留历史 |
 | `web/` | Vue 3 + TypeScript + Vite 源码；构建后的 web/dist 由同一 FastAPI 进程提供 |
 
 ## 已实现 API 与语义
@@ -54,13 +54,19 @@ flowchart LR
 - `GET /api/transfers/{transfer_id}`：仅任务所属会话可见。`completed` 仅表示服务端读完/写完本地字节，**不表示远端客户端已经保存成功**。
 - `GET /`：仅在已构建 web/dist 时提供同源 Vue 页面；页面通过 Cookie 请求既有 API，不使用 CORS、localStorage、URL token 或 QR token。
 - `python -m lan_distribution_lab download`：用 Bearer 调用元数据与内容 API。它不接受 token 命令行参数；默认以无回显提示读取 token，或用 `--pair` 将无回显的配对码兑换为仅进程内 token。邻接 `.part.json` 只记录 server、file_id、ETag、大小、SHA-256 与已落盘字节；不记录 token 或文件系统路径。
-- `python -m lan_distribution_lab distribute`：控制器侧多客户端分发控制；每个逻辑客户端使用独立凭据与独立输出目录，支持 sequential 与 parallel（客户端数 ≤ 8），输出机器可读 JSON 结果并追加独立 SQLite 分发运行记录；不新增服务端端点。
+- `python -m lan_distribution_lab distribute`：控制器侧多客户端分发控制；每个逻辑客户端使用独立凭据与独立输出目录，支持 sequential、parallel 与 controlled（固定并发上限，客户端数 ≤ 8），输出机器可读 JSON 结果并追加独立 SQLite 分发运行记录；不新增服务端端点。
 
-## 分发控制（T007）
+## 分发控制（T007/T008）
 
-`distribute` 是控制器进程，只协调多个客户端分别主动拉取同一对象；服务端仍是唯一的文件与认证权威，不新增推送、P2P 或调度端点。`sequential` 逐个启动客户端，前一个下载与发布结束后才启动下一个；`parallel` 在一次运行内以有界线程池同时启动所有客户端（上限 8），多个阻塞 HTTP 下载在网络层面真实重叠，测试以服务端同时在途请求数验证，而不是以耗时推断策略快慢。每个客户端使用自己的 Bearer 会话与 `client-<n>/<output-name>`；目标已存在且内容不同即失败不覆盖；单个客户端认证失败、超时、断开或槽位不足只影响自身记录。
+`distribute` 是控制器进程，只协调多个客户端分别主动拉取同一对象；服务端仍是唯一的文件与认证权威，不新增推送、P2P 或调度端点。三种策略：
 
-运行记录含唯一 run_id、策略、文件大小/SHA-256、各客户端 task_id/状态/UTC 起止时间/单调耗时/字节/复用字节/安全错误类型，以及成功/失败/取消汇总。凭据、Cookie、配对码与私人绝对路径不写入 JSON、SQLite 或日志。控制器运行在一台电脑上，逻辑客户端是独立会话的本机进程，不是真实远程设备。
+- `sequential`：逐个启动客户端，前一个下载与发布结束后才启动下一个；`--stop-on-error` 时未开始者标记 `cancelled`。
+- `parallel`：以有界线程池同时启动全部客户端（上限 8），多个阻塞 HTTP 下载在网络层面真实重叠。
+- `controlled`：把客户端任务按确定性 FIFO 顺序提交给固定 `max_concurrent` 个工作者的线程池；同时活跃任务数不超过该上限，任务结束后自动接纳下一个等待任务，队列长度受客户端总数（≤ 8）约束。`--max-concurrent` 只对 `controlled` 有效，必须是 1..参与客户端数且不超过安全上限；缺失或误用会在下载开始前报错。
+
+三种策略都复用 T006 的下载路径（独立会话、强 ETag、Range/If-Range、最终 SHA-256、不覆盖已有目标），单个客户端认证失败、超时、断开或槽位不足只影响自身记录。控制器以 `_ActiveCounter` 记录观测到的最大活跃任务数；客户端排队等待、客户端执行时间和批次总耗时分别记录：`queued_at`/`wait_seconds` 为排队等待，客户端 `duration_seconds` 为执行时间，运行级 `duration_seconds` 为批次耗时，均使用 `time.monotonic()`，时间戳为 UTC。
+
+运行记录含唯一 run_id、策略、`max_concurrent`/`observed_max_active`、文件大小/SHA-256、各客户端 task_id/状态/时间/字节/复用字节/安全错误类型，以及成功/失败/取消汇总。JSON 为 `schema_version: 2`（v1 字段语义不变，新增 `scheduling` 与客户端等待字段）。SQLite 库原地迁移：T007 旧库重建 `distribution_runs` 放宽 strategy CHECK 并保留历史行，`distribution_clients` 增加等待列；重复打开幂等，不删除数据库。凭据、Cookie、配对码与私人绝对路径不写入 JSON、SQLite 或日志。控制器运行在一台电脑上，逻辑客户端是独立会话的本机进程，不是真实远程设备。
 
 ## 安全与资源边界
 
@@ -72,7 +78,7 @@ CLI 每次开始先读取文件元数据，再只接受与之完全匹配的强 
 
 ## 明确未实现
 
-- T008 动态调度、优先级、速率控制与受控并发策略
+- 动态并发窗口、自适应速率控制、优先级调度（T008 固定并发范围外）
 - T009 UDP 发现、P2P 与公网部署
 - 上传幂等键、上传断点续传与浏览器后台续传
 - HTTPS、真实手机/平板的多设备分发、真实 LAN 性能/可靠性实验
