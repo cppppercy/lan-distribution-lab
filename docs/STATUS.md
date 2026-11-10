@@ -1,7 +1,7 @@
 # 当前项目状态
 
 **更新日期**：2026-11-10
-**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 的 Python CLI 安全续传已完成审核补修（重定向凭据、完整 `.part` 复用、续传统计），PR #6 等待最终 CI 与复审。
+**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 的 Python CLI 安全续传已在审核补修后合并（PR #6）；T007 多客户端顺序/并发分发与本机运行记录已实现，等待 PR 审查。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -10,7 +10,7 @@
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
-- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，T006 审核补修后待复审）**；设备发现、多客户端分发：**NOT_IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，待审查）**；设备发现、P2P：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
@@ -23,8 +23,9 @@
 - **T003 — DONE**：T003-A/B 及最终验收补修已合并至 main。
 - **T004 — IN_PROGRESS**：Vue Web、同源静态托管、Cookie 集成、显式私有 IPv4 LAN 启动及自动选址启动脚本已实现；手机热点基础互传已验证，平板、SHA-256 对照和断线等 G1 人工项目待补验。
 - **T005 — DONE**：单 Range、强 ETag If-Range、范围任务语义和自动化边界测试已合并至 main。
-- **T006 — IN_PROGRESS**：Python CLI `.part`/无秘密状态、Range/If-Range 恢复、强响应校验、SHA-256 发布和自动化故障测试已实现；2026-11-10 完成审核补修（拒绝重定向转发凭据、完整 `.part` 免重复下载、`resumed_bytes` 统计归零），PR #6 未合并，等待 CI 与复审。
-- 下一关卡：T006 审查通过后可进入 T007；T004 的剩余真实设备项目仍须如实补验。
+- **T006 — DONE**：Python CLI `.part`/无秘密状态、Range/If-Range 恢复、强响应校验、SHA-256 发布、自动化故障测试与 2026-11-10 审核补修已完成；PR #6 已合并至 main（合并提交 `dbe69d116fb6ecf15b0b7d1c9dae842d3b2c5a55`）。
+- **T007 — IN_PROGRESS**：`python -m lan_distribution_lab distribute` 控制器、sequential/parallel 策略、每客户端独立凭据与独立输出、运行级 JSON 与独立 SQLite 分发记录、16 项本机自动化测试已实现；等待 PR 审查。
+- 下一关卡：T007 审查通过后可进入 T008；T004 的剩余真实设备项目仍须如实补验。
 
 ## T006 审核补修记录（2026-11-10）
 
@@ -41,6 +42,24 @@
 当前分支、工作区状态、PR：feat/T006-resumable-client；PR #6（https://github.com/cppppercy/lan-distribution-lab/pull/6）未合并，HEAD 为 0a35412e2f25a613cc1b44e95a57365da35c7fa0。
 本地提交 SHA：d3ee1fb（fix：client 与测试）、0a35412（docs：STATUS/TASKS/DECISIONS）。
 GitHub Actions：PASS — 上述提交推送后的两次工作流均在 Windows / Python 3.12 成功执行 npm ci、前端测试/构建与 pytest：push [run 42735847761](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42735847761/job/129564759996)（1 分 4 秒）、PR [run 42735853416](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42735853416/job/129564778611)（1 分 24 秒）。本记录自身的文档提交会再次触发工作流，最终状态以 PR #6 Checks 为准；不自动合并。
+合并状态（2026-11-10）：PR #6 已由用户合并至 main，合并提交 dbe69d116fb6ecf15b0b7d1c9dae842d3b2c5a55；T006 状态更新为 DONE。
+```
+
+## T007 验证记录（2026-11-10）
+
+```text
+任务：T007 — 多客户端协同分发与基础策略
+基线分支与起点 SHA：feat/T007-distribution-strategies @ dbe69d116fb6ecf15b0b7d1c9dae842d3b2c5a55（PR #6 合并后的 main）
+实际代码变化：
+  新增 src/lan_distribution_lab/distribution.py：控制器复用 T006 ResumableDownloader，为每个逻辑客户端使用独立凭据与独立输出路径；sequential 为单线程逐个执行（--stop-on-error 时未开始者标记 cancelled），parallel 用有界 ThreadPoolExecutor（客户端数 ≤ 8）让多个阻塞 HTTP 下载真实重叠；记录每客户端 task_id、状态、UTC 起止时间、time.monotonic() 耗时、下载字节、resumed_bytes 与安全错误类型，并汇总运行级 file_id/大小/SHA-256/成功失败取消数与总耗时。
+  新增 src/lan_distribution_lab/distribution_store.py：独立 SQLite distribution_runs/distribution_clients 运行记录，不改变服务端 API 与 transfer_records。
+  client.py 增加 AuthenticationError、ServerBusyError（均为 DownloadError 子类）与公开 metadata() 预检；未改变下载协议与重定向安全策略。
+  CLI 新增 `python -m lan_distribution_lab distribute`：--server/--file-id/--strategy/--clients/--output-dir/--output-name/--pair|--tokens-stdin/--timeout/--retries/--stop-on-error/--results/--records；凭据仅内存，输出 client-<n>/ 子目录，JSON 原子写入，SQLite 追加记录；输出目录与文件名做路径安全检查。
+测试：PASS — 新增 tests/test_distribution.py 16 passed：真实 uvicorn 服务器上 3 个独立会话顺序下载且 SHA-256 正确、transfer_records 的 session_id 互不相同；parallel 用服务端同时在途请求计数证明确实重叠；超时/认证失败/中断互不影响；服务端槽位上限返回 service_unavailable；顺序 stop-on-error 取消剩余；Range/If-Range 续传与最终 SHA-256；JSON 与 SQLite 不含 token 或私人绝对路径；重复运行、空文件、同名文件与已有目标不覆盖；CLI 端到端与参数校验。
+完整回归：`python -m compileall -q src tests` 通过；`python -m pytest`（Python 3.13.7：104 passed, 1 skipped, 1 warning in 23.58s）；`python -m pip check`、`npm --prefix web run test`（2 passed）、`npm --prefix web run build`、`git diff --check` 见下方 CI/验收更新。
+真实设备/网络：NOT_RUN — 控制器运行在一台电脑上，逻辑客户端使用本机独立会话；未做手机、平板或真实 Wi-Fi 的多设备分发，也不把本机线程当作真实远程设备。
+已知限制：未实现 T008 动态调度/优先级/速率控制；并发上限 8；服务端槽位不足时客户端直接失败（不做无限重试）；HTTP 无 TLS；Windows ACL 与断电一致性未实测。
+当前分支、工作区状态、PR：feat/T007-distribution-strategies；本地提交与 GitHub Actions 结果见本记录后续更新。
 ```
 
 ## T006 验证记录（2026-11-09）

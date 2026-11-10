@@ -2,7 +2,7 @@
 
 面向局域网的可靠文件传输与多终端协同分发系统（课程项目）。
 
-> 项目状态：T004 已提供 Vue Web 界面、同源静态托管和显式 LAN 启动方式；T006 提供 Python CLI 的安全下载续传。真实手机/平板互通仍须由用户按本文步骤验证。默认服务仍只监听本机。
+> 项目状态：T004 已提供 Vue Web 界面、同源静态托管和显式 LAN 启动方式；T006 提供 Python CLI 的安全下载续传（已合并）；T007 提供本机多客户端顺序/并发分发控制与运行记录。真实手机/平板互通仍须由用户按本文步骤验证。默认服务仍只监听本机。
 
 ## 项目目标
 
@@ -27,7 +27,7 @@
 
 代码、密钥、真实成果以当前仓库与测试记录为准。本文不声称任何尚未执行的测试通过。
 
-## 当前可运行基线（T001 + T003 + T004）
+## 当前可运行基线（T001 + T003 + T004 + T006 + T007）
 
 ### 前置条件
 
@@ -114,6 +114,35 @@ python -m lan_distribution_lab download `
 
 如果服务器回退完整 `200`、返回 `416`、ETag/Content-Range 不匹配、本地状态不一致或 SHA-256 失败，客户端绝不会把新字节追加到旧 `.part`；旧工件会改名为 `.stale-<随机值>` 后从头获取。网络故障默认最多重试 2 次（可用 `--retries` 调整），每个 HTTP 请求默认 15 秒超时（`--timeout`）。`--token-stdin` 仅供调用方已能安全保护标准输入的场景；日常优先使用默认不回显提示或 `--pair`。
 
+### 多客户端协同分发（T007）
+
+`distribute` 用多个**独立会话**把同一文件分别下载到本机多个逻辑客户端目录，复用 T006 的 `ResumableDownloader`，因此每个客户端仍执行强 ETag 校验、Range/If-Range 续传、最终 SHA-256 验证和不覆盖已有目标的发布。它是中心服务器模式下的控制器：逻辑客户端是独立的 Bearer 会话，但不是真实远程设备。
+
+先为每个逻辑客户端准备独立凭据。推荐在主机为每个客户端生成一个一次性 `read` 配对码，然后在 `distribute` 中用 `--pair` 依次无回显输入；也可以由调用方通过安全管道用 `--tokens-stdin` 每行提供一个 token：
+
+```powershell
+# 两个逻辑客户端 → 在主机执行两次，各生成一个一次性 read 配对码
+python -m lan_distribution_lab pair create --scope read --data-dir $dataDir --managed-root $managedRoot
+
+# 顺序分发：前一个客户端完成后才启动下一个
+python -m lan_distribution_lab distribute `
+  --server http://127.0.0.1:8000 `
+  --file-id 12345678-1234-5678-1234-567812345678 `
+  --strategy sequential --clients 2 `
+  --output-dir "$HOME\Downloads\distribution" `
+  --pair
+
+# 并发分发：两个客户端同时发起下载
+python -m lan_distribution_lab distribute `
+  --server http://127.0.0.1:8000 `
+  --file-id 12345678-1234-5678-1234-567812345678 `
+  --strategy parallel --clients 2 `
+  --output-dir "$HOME\Downloads\distribution" `
+  --pair
+```
+
+每个客户端写入 `--output-dir/client-<n>/<--output-name>`（默认 `download.bin`），互不覆盖；若目标文件已存在且内容不同，该客户端失败而不会覆盖用户文件。结果写入 `--output-dir/distribution-result.json`（含 `run_id`、策略、文件 SHA-256、每个客户端的起止时间、字节数、复用字节、耗时与安全错误类型，以及成功/失败/取消汇总），并追加独立 SQLite 记录 `--output-dir/distribution-runs.db`。`--stop-on-error` 只适用于 `sequential`，会把未开始的客户端标记为 `cancelled`。客户端数上限为 8；`parallel` 的真实重叠已由本机服务器同时在途请求测试证明，但这不等于真实多设备分发。
+
 ### 构建并使用 Web 页面（T004）
 
 先构建一次 Vue 页面；构建产物不提交到 Git，但 `python -m lan_distribution_lab serve` 会从 `web/dist` 同源提供它：
@@ -176,4 +205,4 @@ npm --prefix web run test
 npm --prefix web run build
 ```
 
-当前自动化测试覆盖健康接口、配对码一次性/过期/并发兑换、限速、Cookie/Bearer、权限范围、撤销、Origin、摘要存储与重启持久化；也覆盖显式 LAN host/Origin、静态页面不遮蔽 API，以及同源前端 API 调用。它不等同于手机、平板、真实 Wi-Fi、Windows ACL/reparse point 或真实浏览器下载保存验证。详见 [当前架构](docs/ARCHITECTURE.md)、[威胁模型](docs/THREAT_MODEL.md) 与 [实验记录](docs/EXPERIMENTS.md)。
+当前自动化测试覆盖健康接口、配对码一次性/过期/并发兑换、限速、Cookie/Bearer、权限范围、撤销、Origin、摘要存储与重启持久化；也覆盖显式 LAN host/Origin、静态页面不遮蔽 API、同源前端 API 调用，以及 T007 的顺序/并发分发、独立会话隔离、超时/认证失败/槽位上限、Range 续传和 JSON/SQLite 运行记录。它不等同于手机、平板、真实 Wi-Fi、Windows ACL/reparse point 或真实浏览器下载保存验证。详见 [当前架构](docs/ARCHITECTURE.md)、[威胁模型](docs/THREAT_MODEL.md) 与 [实验记录](docs/EXPERIMENTS.md)。
