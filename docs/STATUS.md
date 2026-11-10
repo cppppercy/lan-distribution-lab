@@ -1,7 +1,7 @@
 # 当前项目状态
 
 **更新日期**：2026-11-10
-**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 Python CLI 安全续传、T007 分发、T008 受控并发和 T009 UDP 发现均已合并。T010 的控制器侧可重复实验驱动与数据导出已实现、完成本地自动化回归，等待审查；真实 G4 网络实验仍为 NOT_RUN。
+**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 Python CLI 安全续传、T007 分发、T008 受控并发、T009 UDP 发现与 T010 实验驱动均已合并。T011 的只读数据分析、静态图表和抓包方法正在实现；真实 G4 网络实验仍为 NOT_RUN。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -10,7 +10,7 @@
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
-- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，已合并）**；UDP 局域网发现与 `discover` CLI：**IMPLEMENTED（T009，已合并）**；控制器侧实验计划、CSV/JSON 原始数据与描述统计：**IMPLEMENTED（T010，待审查）**；P2P：**NOT_IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，已合并）**；UDP 局域网发现与 `discover` CLI：**IMPLEMENTED（T009，已合并）**；控制器侧实验计划、CSV/JSON 原始数据与描述统计：**IMPLEMENTED（T010，已合并）**；T010 只读校验、SVG 图表/Markdown 分析与抓包方法：**IMPLEMENTED（T011，待审查）**；P2P：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
@@ -27,8 +27,20 @@
 - **T007 — DONE**：`python -m lan_distribution_lab distribute` 控制器、sequential/parallel 策略、每客户端独立凭据与独立输出、运行级 JSON 与独立 SQLite 分发记录、审核补修已完成；PR #7 已合并至 main（合并提交 `155462e5324f915645f490b02847fa3a5e46addf`）。
 - **T008 — DONE**：controlled 固定并发策略（`--max-concurrent`）、FIFO 排队、等待/执行/批次计时拆分、JSON schema v2、T007 SQLite 原地迁移与 11 项新测试已完成；PR #8 已合并至 main（合并提交 `fa698871e12f650bea5a1b32da322b217aa662e4`）。
 - **T009 — DONE**：可选 UDP 局域网发现 responder、`discover` CLI、request_id/来源 IP/版本校验、去重排序、限速与 14 项测试已合并至 main（`1d2c131ecc71ed3e8d49428e7a51318993681ee1`）；真实广播仍 NOT_RUN。
-- **T010 — IN_PROGRESS（实现与本地自动化完成，待审查）**：`experiment` CLI 以有界、确定顺序复用既有分发，保留每轮原始 JSON 与 CSV/manifest，记录失败/取消/中断且不写凭据。整体状态仅在全部计划 trial 成功时为 `completed`；失败或取消会返回非零 CLI 退出码而不删除导出。真实手机/平板/无线 G4 数据仍 NOT_RUN。
-- 下一关卡：T010 审查和合并后才可进入 T011；T004/G1 与 T010/G4 的剩余真实设备项目仍须如实补验。
+- **T010 — DONE（已合并）**：`experiment` CLI 以有界、确定顺序复用既有分发，保留每轮原始 JSON 与 CSV/manifest，记录失败/取消/中断且不写凭据。整体状态仅在全部计划 trial 成功时为 `completed`；失败或取消会返回非零 CLI 退出码而不删除导出。真实手机/平板/无线 G4 数据仍 NOT_RUN。
+- **T011 — IN_PROGRESS（实现与本地自动化完成，待审查）**：`analyze` 只读校验 T010 manifest/CSV/原始 run，按可比条件输出描述统计、SVG 和 Markdown；可选抓包输入仅是本地脱敏摘要，未读取 PCAP 或执行真实抓包。真实 G4 数据仍 NOT_RUN。
+- 下一关卡：T011 审查和合并后才可进入 T012；T004/G1 与 T010/G4 的剩余真实设备项目仍须如实补验。
+
+## T011 验证记录（2026-11-10）
+
+```text
+任务：T011 — 网络实验分析、性能图表与抓包证据整理
+基线 SHA：3fb1eceec16f92cc95c5fa96e910fa331cb57d4d（PR #10 合并后的 main）
+实际代码变化：新增标准库 analysis.py 与 `python -m lan_distribution_lab analyze`。它只读接受 schema-v1 T010 目录，核对 manifest、trials.csv、clients.csv 与存在的 DistributionRun JSON；要求每个计划 `round × file_id × strategy` 恰好一次，原始记录唯一、严格位于对应 trial 目录，逐客户端核对 ID、状态、字节/时间和完整性结果；拒绝重复 ID、NaN/∞、零时长完整 trial、状态/计数/文件 ID/大小/SHA-256 矛盾和缺失原始记录。按文件版本/大小、客户端数、环境、超时、重试、并发配置和脱敏服务器身份分组，生成 analysis.json、Markdown 与静态 SVG；失败/取消不被静默删除。不同服务器不会合并为 controlled 上限对照，输出不回显服务器地址。可选 packet summary 仅接收受限大小/数量、字段和值白名单 JSON，不读取 PCAP、不监听/上传网络流量；自由文本、认证信息、Cookie、私人路径及不安全标识符会被拒绝。分析输出目录若位于输入目录内（含绝对、相对或可解析的符号链接别名）会在创建前拒绝。
+本地验证：PASS — `python -m compileall -q src tests`；`tests/test_analysis.py` 20 passed、1 skipped（符号链接别名路径因当前 Windows 账户无创建符号链接权限而跳过；绝对/相对路径覆盖已通过），覆盖标准目录、三策略统计、MiB 换算、Jain 指数、失败/取消、不同条件与不同服务器分组、计划/原始记录/客户端篡改拒绝、输入只读、抓包摘要白名单、自由文本/超大输入/过多 observation 拒绝与无秘密报告。完整 Python 套件因本机工具会丢失长命令尾部输出而按互斥文件组实际完成：analysis/auth/LAN/experiment 59 passed, 1 skipped, 1 warning in 26.92s；distribution 37 passed in 16.75s；file API/health/resume/UDP/Web 75 passed, 1 skipped, 1 warning in 13.91s（合计 171 passed, 2 skipped, 2 warnings）。两项 skip 均为当前 Windows 测试环境不允许创建符号链接。`python -m pip check`：No broken requirements found；`npm --prefix web run test`：2 passed；`npm --prefix web run build`：通过；`git diff --check`：通过。
+真实设备/网络/抓包：NOT_RUN — 未执行手机、平板、Wi-Fi/热点、校园网、断线、Wireshark/tshark 或真实 PCAP 分析。
+已知限制：应用层吞吐不是 TCP/NIC 带宽；Jain 指数只分析完整 trial 成功客户端的应用层完成速率；无脱敏抓包摘要时报告不作包级结论。
+```
 
 ## T010 验证记录（2026-11-10）
 
