@@ -79,6 +79,14 @@ class ResumeRestartRequired(DownloadError):
     """A previous partial object cannot be safely appended to."""
 
 
+class AuthenticationError(DownloadError):
+    """The server rejected the supplied Bearer credential."""
+
+
+class ServerBusyError(DownloadError):
+    """The server refused the request because a bounded slot is exhausted."""
+
+
 class _Response(Protocol):
     status: int
     headers: Any
@@ -206,6 +214,10 @@ class ResumableDownloader:
                     raise
                 retry_count += 1
                 self._sleep(0.25 * retry_count)
+
+    def metadata(self, file_id: str) -> FileMetadata:
+        """Read the authenticated metadata without starting a download."""
+        return self._fetch_metadata(_validate_file_id(file_id))
 
     def _fetch_metadata(self, file_id: str) -> FileMetadata:
         for attempt in range(self.retries + 1):
@@ -651,7 +663,9 @@ def _parse_content_length(value: str | None) -> int:
 
 def _http_error(response: _Response, fallback: str) -> DownloadError:
     if response.status == 401:
-        return DownloadError("Server rejected the access credential.")
+        return AuthenticationError("Server rejected the access credential.")
+    if response.status == 503:
+        return ServerBusyError("Server is at its transfer slot limit; retry later.")
     return DownloadError(f"{fallback} HTTP {response.status}.")
 
 
