@@ -17,7 +17,8 @@
 | T005 | DONE | 单 HTTP Range、If-Range 版本保护、范围任务语义与边界测试已合并 | G2 | T003 |
 | T006 | DONE | Python CLI 断点续传、失败恢复、完整性验证已实现；审核补修后 PR #6 已合并 | G2 | T005 |
 | T007 | DONE | 多客户端顺序/并发分发、独立会话任务记录与 JSON/SQLite 运行记录已实现；审核补修后 PR #7 已合并 | G3 | T006 |
-| T008 | IN_PROGRESS | 受控并发调度（controlled、--max-concurrent）、调度记录与 SQLite 迁移已实现；等待 PR 审查 | G3 | T007 |
+| T008 | DONE | 受控并发调度（controlled、--max-concurrent）、调度记录与 SQLite 迁移已实现；审核通过后 PR #8 已合并 | G3 | T007 |
+| T009 | IN_PROGRESS | UDP 局域网发现、`discover` CLI、安全校验与连接体验已实现；等待 PR 审查 | G3 | T008 |
 | T009 | TODO | UDP 桌面发现、连接回退及设备授权体验 | G3 | G1 稳定后 |
 | T010 | TODO | 自动化实验驱动、数据记录、真实设备测试 | G4 | T008 |
 | T011 | TODO | 抓包与网络理论分析、性能图表和局限性评估 | G4 | T010 |
@@ -133,7 +134,17 @@
 
 **实验入口**：三条策略可在相同文件/客户端数/环境下分别运行并保存独立 JSON 与 SQLite 原始数据，方法见 `docs/EXPERIMENTS.md`；本阶段不生成性能结论。
 
-**非目标**：动态并发窗口、自适应速率控制、优先级调度（不在 T008 固定并发范围内）；T009 UDP 发现、P2P；T010 正式性能实验与图表；上传续传、浏览器后台续传、HTTPS/公网部署、真实设备人工测试。
+**合并状态（2026-11-10）**：PR #8 在审核与 CI 通过后已合并至 main，合并提交 `fa698871e12f650bea5a1b32da322b217aa662e4`；T008 状态更新为 DONE。
+
+### T009（UDP 局域网发现与连接体验）
+
+**完成内容（待审查）**：新增可选 UDP 局域网发现。`serve --discover --host <私有 IPv4>` 才启动独立 UDP responder（默认 47800，`--discover-bind` 默认 `0.0.0.0`），HTTP 监听保持原有显式私有/回环限制；未启用时不开 UDP。协议为有界 UTF-8 JSON 单请求/单响应：请求含协议名/版本/type/随机 request_id；响应回显 request_id，并含非秘密 instance_id、service_name、http_port、requires_pairing 与 features；请求与响应各 ≤ 1 KiB，字段长度受限，不含 token/Cookie/配对码/密钥/路径/文件信息。响应端只接受私有/回环来源，校验协议、版本与 request_id，并做每来源速率限制与来源数量上限。新增 `python -m lan_distribution_lab discover`：IPv4 目标可重复指定（默认 255.255.255.255）、可绑定本地网卡地址、有限超时、去重排序、拒绝版本/request_id 不匹配及超大/非法包；以 UDP 源 IP + http_port 构造 URL，不信任正文 URL，不自动认证或下载。`scripts/start-lan.ps1` 增加 `-EnableDiscovery`/`-DiscoveryPort`，默认关闭；手机/平板继续手动访问 URL 并用六位配对码认证，二维码未实现。
+
+**验收证据（本地）**：新增 `tests/test_udp_discovery.py` 14 项：loopback 请求/响应与 URL 构造、响应字段/大小/无秘密、非法请求被忽略且服务仍响应、request_id/版本/来源/超大响应校验、重复与恶意响应的去重排序、发现请求不含凭据、超时快速返回、UDP 端口冲突与关闭后释放、限速器窗口与来源上限、地址/服务名校验、serve 发现开关与参数校验、CLI 无结果回退提示、JSON 输出与错误退出。完整套件/CI 结果见 `docs/STATUS.md`。
+
+**真实网络**：NOT_RUN — 本机 loopback UDP 成功不等于真实 Wi-Fi/热点广播发现；Windows 防火墙、校园 Wi-Fi 客户端隔离、多网卡选择需人工实验。
+
+**非目标**：P2P、UDP 承载文件、跨公网/跨 VLAN 自动发现、UPnP/NAT 穿透、自动防火墙、HTTPS、远程控制、二维码（未实现）、T010 正式性能实验。
 
 ### T003 及后续任务共同模板
 
