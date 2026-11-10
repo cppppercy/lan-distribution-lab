@@ -1,7 +1,7 @@
 # 当前项目状态
 
 **更新日期**：2026-11-10
-**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 的 Python CLI 安全续传已在审核补修后合并（PR #6）；T007 多客户端顺序/并发分发与运行记录已合并（PR #7）；T008 受控并发调度（controlled）与 SQLite 迁移已实现，等待 PR 审查。
+**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 的 Python CLI 安全续传已在审核补修后合并（PR #6）；T007 多客户端分发已合并（PR #7）；T008 受控并发调度已合并（PR #8）；T009 UDP 局域网发现已实现，等待 PR 审查。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -10,7 +10,7 @@
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
-- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，待审查）**；设备发现、P2P：**NOT_IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，已合并）**；UDP 局域网发现与 `discover` CLI：**IMPLEMENTED（T009，待审查）**；P2P：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
@@ -25,8 +25,27 @@
 - **T005 — DONE**：单 Range、强 ETag If-Range、范围任务语义和自动化边界测试已合并至 main。
 - **T006 — DONE**：Python CLI `.part`/无秘密状态、Range/If-Range 恢复、强响应校验、SHA-256 发布、自动化故障测试与 2026-11-10 审核补修已完成；PR #6 已合并至 main（合并提交 `dbe69d116fb6ecf15b0b7d1c9dae842d3b2c5a55`）。
 - **T007 — DONE**：`python -m lan_distribution_lab distribute` 控制器、sequential/parallel 策略、每客户端独立凭据与独立输出、运行级 JSON 与独立 SQLite 分发记录、审核补修已完成；PR #7 已合并至 main（合并提交 `155462e5324f915645f490b02847fa3a5e46addf`）。
-- **T008 — IN_PROGRESS**：新增 controlled 固定并发策略（`--max-concurrent`）、FIFO 排队、等待/执行/批次计时拆分、JSON schema v2、T007 SQLite 原地迁移与 11 项新测试已实现；等待 PR 审查。
-- 下一关卡：T008 审查通过后可进入 T009；T004 的剩余真实设备项目仍须如实补验。
+- **T008 — DONE**：controlled 固定并发策略（`--max-concurrent`）、FIFO 排队、等待/执行/批次计时拆分、JSON schema v2、T007 SQLite 原地迁移与 11 项新测试已完成；PR #8 已合并至 main（合并提交 `fa698871e12f650bea5a1b32da322b217aa662e4`）。
+- **T009 — IN_PROGRESS**：可选 UDP 局域网发现 responder、`discover` CLI、request_id/来源 IP/版本校验、去重排序、限速与 14 项新测试已实现；`scripts/start-lan.ps1` 支持显式 `-EnableDiscovery`；等待 PR 审查。
+- 下一关卡：T009 审查通过后可进入 T010；T004 的剩余真实设备项目仍须如实补验。
+
+## T009 验证记录（2026-11-10）
+
+```text
+任务：T009 — UDP 局域网发现与连接体验
+基线分支与起点 SHA：feat/T009-udp-discovery @ fa698871e12f650bea5a1b32da322b217aa662e4（PR #8 合并后的 main）
+实际代码变化：
+  新增 src/lan_distribution_lab/discovery.py：可选 UDP 发现 responder 与客户端探测。协议为有界 UTF-8 JSON 单请求/单响应（请求/响应各 ≤1 KiB）；请求含协议名、协议版本、type=discover、随机 request_id；响应回显 request_id，并含非秘密 instance_id、service_name、http_port、requires_pairing、features。响应端只接受私有/回环来源、校验协议/版本/request_id，按来源限速并限制跟踪来源数；无效、超大或格式错误的数据包被忽略。客户端以 UDP 源 IP + http_port 构造 URL（不信任正文 URL），校验 request_id/版本/字段边界与私有来源，去重（instance+address+port）、排序并限制响应数/数据包数/总超时，不发送任何凭据。
+  __main__.py：serve 新增 --discover/--discover-port/--discover-bind/--service-name（仅显式启用；--discover 要求私有 LAN --host，UDP 绑定与 HTTP 绑定策略分离）；新增 `python -m lan_distribution_lab discover`（--port/--timeout/--broadcast 可重复/--interface/--json），发现超时时提示手动 URL；serve 启动时打印 LAN URL 与发现端口，关闭时 finally 释放 UDP socket。
+  scripts/start-lan.ps1：新增 -EnableDiscovery/-DiscoveryPort，默认关闭，启用时传递 --discover 并提示防火墙需人工放行；未改变原有默认行为。
+测试：PASS — 新增 tests/test_udp_discovery.py 14 项：loopback 发现与 URL 构造、响应字段/大小/无秘密、非法请求被忽略且服务仍响应、request_id/版本/来源/超大响应拒绝、重复与恶意响应的去重排序、发现请求不含凭据、超时快速返回、UDP 端口冲突与关闭后释放、限速器窗口/来源上限、地址与服务名校验、serve 发现开关与参数校验、CLI 无结果回退提示、JSON 输出与错误退出。
+完整回归：`python -m compileall -q src tests` 通过；`python -m pytest`（Python 3.13.7：139 passed, 1 skipped, 1 warning in 41.12s）；`python -m pip check`、`npm --prefix web run test`（2 passed）、`npm --prefix web run build`、`git diff --check` 见下方 CI/验收更新。
+真实设备/网络：NOT_RUN — 本机 loopback UDP 测试成功不代表真实 Wi-Fi/手机热点广播发现；Windows 防火墙、校园 Wi-Fi 客户端隔离、多网卡选择、休眠/断网与跨 VLAN 均未实测。
+已知限制：UDP 广播只在当前广播域有效；二维码未实现（手动输入 URL 即可）；UDP 发现不提供身份认证，发现后仍需一次性配对码；HTTP 无 TLS；未实现 P2P/公网发现。
+当前分支、工作区状态、PR：feat/T009-udp-discovery；PR #9（https://github.com/cppppercy/lan-distribution-lab/pull/9）未合并，HEAD 为 f837a75ba3f8b91c336dbe0ce04a7dd347470357（以远端为准）。
+本地提交 SHA：b47353d34af14b73bbb417e209605894667907b8（feat：UDP 发现与 CLI/脚本）、f837a75ba3f8b91c336dbe0ce04a7dd347470357（docs：README/ARCHITECTURE/THREAT_MODEL/TASKS/STATUS/DECISIONS/TEST_PLAN/EXPERIMENTS）。
+GitHub Actions：PASS — 上述提交推送后的两次工作流均在 Windows / Python 3.12 成功执行 npm ci、前端测试/构建与 pytest：push [run 42776179530](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42776179530/job/129695085847)（1 分 41 秒）、PR [run 42776198753](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42776198753/job/129695144094)（1 分 47 秒）。本记录自身的文档提交会再次触发工作流，最终状态以 PR #9 Checks 为准，不自动合并。
+```
 
 ## T008 验证记录（2026-11-10）
 
@@ -45,6 +64,7 @@
 当前分支、工作区状态、PR：feat/T008-controlled-concurrency；PR #8（https://github.com/cppppercy/lan-distribution-lab/pull/8）未合并，HEAD 为 003fb46579807fc85b45b868415a824b9cd2f322（以远端为准）。
 本地提交 SHA：2a123d07ffdaa1ba4186cc0efa33afbfda6c0dcd（feat：controlled 与迁移）、003fb46579807fc85b45b868415a824b9cd2f322（docs：README/ARCHITECTURE/TASKS/STATUS/DECISIONS/EXPERIMENTS）。
 GitHub Actions：PASS — 上述提交推送后的两次工作流均在 Windows / Python 3.12 成功执行 npm ci、前端测试/构建与 pytest：push [run 42772364639](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42772364639/job/129682892998)（1 分 39 秒）、PR [run 42772380585](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42772380585/job/129682941726)（1 分 36 秒）。本记录自身的文档提交会再次触发工作流，最终状态以 PR #8 Checks 为准，不自动合并。
+合并状态（2026-11-10）：PR #8 已由用户合并至 main，合并提交 fa698871e12f650bea5a1b32da322b217aa662e4；T008 状态更新为 DONE。
 ```
 
 ## T006 审核补修记录（2026-11-10）

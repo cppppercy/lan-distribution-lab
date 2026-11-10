@@ -151,6 +151,29 @@ python -m lan_distribution_lab distribute `
 
 每个客户端写入 `--output-dir/client-<n>/<--output-name>`（默认 `download.bin`），互不覆盖；若目标文件已存在且内容不同，该客户端失败而不会覆盖用户文件。**同一次分发中的多个客户端必须使用不同的 Bearer token**，重复凭据会在下载开始前被拒绝且错误信息不回显 token；`--pair` 为每个逻辑客户端使用独立的一次性配对码。`--max-concurrent N` 仅用于 `controlled`，N 必须为 1..客户端数且不超过安全上限；缺失或误用于其他策略会在下载开始前报错。`--results` 与 `--records` 会在下载启动前做规范化路径校验（解析 `..`、符号链接别名与 Windows 大小写差异）：两者不得使用同一路径，也不得与任何客户端目标、`.part` 或 `.part.json` 冲突；冲突时立即失败，不启动下载、不写结果、不改变已有文件。结果写入 `--output-dir/distribution-result.json`（原子替换；`schema_version: 2`，含 `run_id`、策略、`scheduling.max_concurrent`/`observed_max_active`、文件 SHA-256、每个客户端的排队时间戳/`wait_seconds`/执行时间/字节数/复用字节/安全错误类型，以及成功/失败/取消汇总；v1 字段语义不变），并追加独立 SQLite 记录 `--output-dir/distribution-runs.db`（只追加；打开 T007 旧库时原地迁移并保留历史记录）。`--stop-on-error` 只适用于 `sequential`，会把未开始的客户端标记为 `cancelled`。客户端数上限为 8；`parallel`/`controlled` 的真实重叠由本机服务器同时在途请求测试证明，但这不等于真实多设备分发。排队等待、客户端执行时间与批次总耗时是三个独立指标，测试不据此宣称某种策略更快。
 
+### UDP 局域网发现（T009，可选）
+
+服务**默认不启用** UDP 发现，`127.0.0.1` 默认模式不会向局域网广播。显式启用后，服务在 UDP 端口（默认 `47800`）响应发现请求；发现只返回连接候选，**不授予任何权限**，仍需六位一次性配对码完成认证。
+
+```powershell
+# 服务端：显式私有 LAN 地址 + 可选发现（UDP 绑定与 HTTP 绑定策略分离）
+python -m lan_distribution_lab serve --host 192.168.1.23 --port 8000 `
+  --discover --discover-port 47800 --service-name "Study PC"
+
+# 另一台 Windows 电脑：发现服务（默认目标 255.255.255.255，2 秒超时）
+python -m lan_distribution_lab discover --timeout 2
+
+# 多网卡/指定广播域：指定目标广播地址与本地源地址
+python -m lan_distribution_lab discover --broadcast 192.168.1.255 --interface 192.168.1.23
+
+# 机器可读输出
+python -m lan_distribution_lab discover --json
+```
+
+`--discover` 只接受私有 LAN IPv4 的 `--host`（拒绝 loopback）；`--discover-port`、`--discover-bind`（默认 `0.0.0.0`，也可指定某网卡的私有/回环 IPv4）与 `--service-name` 只能与 `--discover` 一起使用。Windows 防火墙可能阻止入站 UDP，本项目**不会自动修改防火墙**；需要时由用户手动放行该 UDP 端口。`scripts/start-lan.ps1 -EnableDiscovery -DiscoveryPort 47800` 可在启动脚本中显式开启。
+
+发现结果列出服务名称、IP、HTTP 端口、完整 URL 与协议版本。发现超时会提示手动访问 `http://<LAN-IP>:<HTTP-PORT>/`；手机和平板仍用浏览器打开该 URL 并输入一次性配对码。UDP 广播只在当前广播域有效，校园 Wi-Fi、客户端隔离或跨 VLAN 可能不可用；本项目不实现浏览器 UDP 发现、二维码（当前未实现，手动输入 URL 即可）或云端发现。
+
 ### 构建并使用 Web 页面（T004）
 
 先构建一次 Vue 页面；构建产物不提交到 Git，但 `python -m lan_distribution_lab serve` 会从 `web/dist` 同源提供它：

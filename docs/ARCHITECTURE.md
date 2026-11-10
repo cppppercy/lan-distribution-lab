@@ -1,6 +1,6 @@
-# 当前架构（T008 受控并发调度）
+# 当前架构（T009 UDP 局域网发现）
 
-**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range、T006 Python CLI 安全续传、T007 多客户端分发（均已合并）与 T008 受控并发调度均已实现并经本机自动化测试/构建验证。T004 已获得手机热点基础收发的用户确认；平板、真实 LAN 断线恢复、真实多设备分发与性能实验仍未验证。UDP、P2P 与动态调度未实现。
+**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range、T006 Python CLI 安全续传、T007 多客户端分发、T008 受控并发与 T009 UDP 局域网发现均已实现并经本机自动化测试/构建验证（T009 的真实广播发现未实测）。T004 已获得手机热点基础收发的用户确认；平板、真实 LAN 断线恢复、真实多设备分发与性能实验仍未验证。P2P 未实现。
 
 ## 组件与数据流
 
@@ -13,6 +13,8 @@ flowchart LR
     client["CLI：Bearer 仅进程内存"] --> api
     distributor["CLI distribute：每客户端独立 Bearer"] --> client
     distributor --> records["分发 JSON + 独立 SQLite 运行记录"]
+    discover_cli["CLI discover：UDP 探测"] --> udp["UDP discovery responder（opt-in）"]
+    udp --> api
     api --> auth["认证、scope、Origin"]
     api --> multipart["有界 multipart 流解析"]
     multipart --> staging["managed_root/staging"]
@@ -41,6 +43,7 @@ flowchart LR
 | `client.py` | 标准库 HTTP CLI 客户端；Bearer 内存使用、Range/If-Range 续传、状态验证、SHA-256 与原子发布、元数据预检和鉴权/槽位错误类型 |
 | `distribution.py` | 控制器侧多客户端编排：顺序、普通并发与固定上限受控并发；独立凭据与输出、FIFO 排队、等待/执行计时、JSON 结果与安全错误分类 |
 | `distribution_store.py` | 控制器侧独立 SQLite 分发运行记录（runs/clients），支持 T007 库原地迁移到三种策略且保留历史 |
+| `discovery.py` | 可选的 UDP 局域网发现协议：有界 JSON 请求/响应、来源 IP 校验、request_id 回显、去重/排序/超时与限速 |
 | `web/` | Vue 3 + TypeScript + Vite 源码；构建后的 web/dist 由同一 FastAPI 进程提供 |
 
 ## 已实现 API 与语义
@@ -68,6 +71,14 @@ flowchart LR
 
 运行记录含唯一 run_id、策略、`max_concurrent`/`observed_max_active`、文件大小/SHA-256、各客户端 task_id/状态/时间/字节/复用字节/安全错误类型，以及成功/失败/取消汇总。JSON 为 `schema_version: 2`（v1 字段语义不变，新增 `scheduling` 与客户端等待字段）。SQLite 库原地迁移：T007 旧库重建 `distribution_runs` 放宽 strategy CHECK 并保留历史行，`distribution_clients` 增加等待列；重复打开幂等，不删除数据库。凭据、Cookie、配对码与私人绝对路径不写入 JSON、SQLite 或日志。控制器运行在一台电脑上，逻辑客户端是独立会话的本机进程，不是真实远程设备。
 
+## UDP 局域网发现（T009）
+
+服务默认关闭 UDP 发现。只有显式 `serve --discover --host <私有 IPv4>` 时才启动独立 UDP responder（默认绑定 `0.0.0.0:47800`）；UDP 绑定范围与 HTTP 绑定策略分离，HTTP 仍只接受显式私有/回环地址，不因发现功能放宽。
+
+协议为单请求/单响应的有界 UTF-8 JSON：请求含协议名、协议版本、`type=discover` 和随机 `request_id`；响应回显同一 `request_id`，并含非秘密 `instance_id`、`service_name`、`http_port`、`requires_pairing` 与兼容性 `features`。请求/响应各不超过 1 KiB，服务名与标识符有长度和字符限制；响应不含 token、Cookie、配对码、服务器密钥、数据目录、文件列表或文件内容。
+
+客户端只接受私有或回环 IPv4 来源，并以 **UDP 源 IP + 响应中的 HTTP 端口**构造 URL（不信任正文中的任意 URL）；校验 `request_id`、协议版本与字段边界，按内联去重键去重并排序，限制响应数/数据包数与总超时，丢弃非法或超大 UDP 包而不终止发现。服务端只响应合法请求，并做每来源速率限制与来源数量上限，避免反射放大和内存/CPU 滥用。UDP 发现只寻找候选服务，不认证、不下载、不执行文件，也不授予 read/read_write 权限。
+
 ## 安全与资源边界
 
 默认值：单文件 64 MiB、multipart 总请求 64 MiB + 128 KiB、受控对象总额 1 GiB、保留 64 MiB 空闲空间、同时上传 2、下载 8。超过限制返回统一安全错误并清理 staging；`ENOSPC`/配额不足返回 507。上传和下载每个分块复核会话是否撤销或过期。
@@ -79,7 +90,8 @@ CLI 每次开始先读取文件元数据，再只接受与之完全匹配的强 
 ## 明确未实现
 
 - 动态并发窗口、自适应速率控制、优先级调度（T008 固定并发范围外）
-- T009 UDP 发现、P2P 与公网部署
+- P2P 文件块交换、公网/跨 VLAN/跨广播域自动发现与部署
+- 浏览器原生 UDP 发现与二维码连接（T009 未实现，手动 URL 可用）
 - 上传幂等键、上传断点续传与浏览器后台续传
 - HTTPS、真实手机/平板的多设备分发、真实 LAN 性能/可靠性实验
 

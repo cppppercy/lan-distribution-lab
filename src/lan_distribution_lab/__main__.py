@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import ipaddress
+import json
 import sys
 from pathlib import Path
 
@@ -13,6 +14,17 @@ import uvicorn
 from .app import create_app
 from .client import DownloadError, ResumableDownloader, exchange_cli_pairing_code
 from .config import Settings
+from .discovery import (
+    DEFAULT_DISCOVERY_PORT,
+    DEFAULT_SERVICE_NAME,
+    DiscoveryError,
+    DiscoveryResponder,
+    discover_services,
+    validate_discovery_bind,
+    validate_interface_address,
+    validate_service_name,
+    validate_target_address,
+)
 from .distribution import (
     MAX_CLIENTS,
     MAX_CONCURRENT,
@@ -42,6 +54,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="listen only on this loopback or private LAN IPv4 address (default: 127.0.0.1)",
     )
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument(
+        "--discover",
+        action="store_true",
+        help="enable the UDP LAN discovery responder (requires a private LAN --host)",
+    )
+    serve.add_argument(
+        "--discover-port",
+        type=int,
+        default=None,
+        help=f"UDP discovery port (default: {DEFAULT_DISCOVERY_PORT}); requires --discover",
+    )
+    serve.add_argument(
+        "--discover-bind",
+        default=None,
+        help="UDP bind address: 0.0.0.0, loopback or private IPv4 (default: 0.0.0.0); requires --discover",
+    )
+    serve.add_argument(
+        "--service-name",
+        default=None,
+        help=f"display name returned by discovery (default: {DEFAULT_SERVICE_NAME!r})",
+    )
 
     pairing = commands.add_parser("pair", help="manage short-lived local pairing codes")
     pair_commands = pairing.add_subparsers(dest="pair_command", required=True)
@@ -67,6 +100,38 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--device-label", help="optional 1-64 character label used only while pairing")
     download.add_argument("--timeout", type=float, default=15.0, help="per-request timeout in seconds")
     download.add_argument("--retries", type=int, default=2, help="finite retry count for network failures")
+
+    discover = commands.add_parser(
+        "discover", help="find LAN Distribution Lab services over UDP"
+    )
+    discover.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_DISCOVERY_PORT,
+        help=f"UDP discovery port (default: {DEFAULT_DISCOVERY_PORT})",
+    )
+    discover.add_argument(
+        "--timeout",
+        type=float,
+        default=2.0,
+        help="total discovery wait in seconds (default: 2.0, maximum: 30)",
+    )
+    discover.add_argument(
+        "--broadcast",
+        action="append",
+        type=_discovery_target,
+        help="IPv4 target, broadcast or unicast; repeatable (default: 255.255.255.255)",
+    )
+    discover.add_argument(
+        "--interface",
+        type=_discovery_interface,
+        help="local loopback/private IPv4 to bind the UDP source (multi-NIC selection)",
+    )
+    discover.add_argument(
+        "--json",
+        action="store_true",
+        help="print a machine-readable JSON array instead of the text list",
+    )
 
     distribute = commands.add_parser(
         "distribute",
@@ -142,9 +207,33 @@ def main(argv: list[str] | None = None) -> None:
         try:
             settings = _settings_from_arguments(arguments)
             host = _listen_host(arguments.host)
-        except argparse.ArgumentTypeError as error:
+            discovery = _discovery_config(arguments, host)
+        except (argparse.ArgumentTypeError, DiscoveryError) as error:
             parser.error(str(error))
-        uvicorn.run(create_app(settings), host=host, port=arguments.port, reload=False)
+        responder: DiscoveryResponder | None = None
+        try:
+            if discovery is not None:
+                responder = DiscoveryResponder(
+                    http_port=arguments.port,
+                    service_name=discovery["service_name"],
+                    bind_address=discovery["bind"],
+                    discovery_port=discovery["port"],
+                )
+                responder.start()
+                print(
+                    f"UDP discovery enabled: {discovery['bind']}:{responder.port} "
+                    f"(service name: {discovery['service_name']})"
+                )
+                print("Find this service from another Windows CLI: python -m lan_distribution_lab discover")
+            if host != "127.0.0.1":
+                print(f"LAN access URL: http://{host}:{arguments.port}/")
+            uvicorn.run(create_app(settings), host=host, port=arguments.port, reload=False)
+        except DiscoveryError as error:
+            print(f"Discovery failed: {error}", file=sys.stderr)
+            raise SystemExit(1) from None
+        finally:
+            if responder is not None:
+                responder.close()
         return
 
     if arguments.command == "pair" and arguments.pair_command == "create":
@@ -189,7 +278,89 @@ def main(argv: list[str] | None = None) -> None:
         _run_distribute_command(arguments)
         return
 
+    if arguments.command == "discover":
+        _run_discover_command(arguments)
+        return
+
     parser.error("unknown command")
+
+
+def _discovery_target(value: str) -> str:
+    try:
+        return validate_target_address(value)
+    except DiscoveryError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
+def _discovery_interface(value: str) -> str:
+    try:
+        return validate_interface_address(value)
+    except DiscoveryError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
+def _discovery_config(
+    arguments: argparse.Namespace, host: str
+) -> dict[str, object] | None:
+    """Validate the opt-in discovery options; ``None`` means discovery is off."""
+    if not arguments.discover:
+        if any(
+            value is not None
+            for value in (
+                arguments.discover_port,
+                arguments.discover_bind,
+                arguments.service_name,
+            )
+        ):
+            raise argparse.ArgumentTypeError(
+                "--discover-port, --discover-bind and --service-name require --discover."
+            )
+        return None
+    if ipaddress.IPv4Address(host).is_loopback:
+        raise argparse.ArgumentTypeError(
+            "--discover requires --host with a private LAN IPv4 address, not loopback."
+        )
+    port = (
+        arguments.discover_port
+        if arguments.discover_port is not None
+        else DEFAULT_DISCOVERY_PORT
+    )
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("--discover-port must be between 1 and 65535.")
+    try:
+        bind_address = validate_discovery_bind(arguments.discover_bind or "0.0.0.0")
+        service_name = validate_service_name(arguments.service_name or DEFAULT_SERVICE_NAME)
+    except DiscoveryError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+    return {"port": port, "bind": bind_address, "service_name": service_name}
+
+
+def _run_discover_command(arguments: argparse.Namespace) -> None:
+    try:
+        services = discover_services(
+            arguments.broadcast or None,
+            discovery_port=arguments.port,
+            timeout=arguments.timeout,
+            interface=arguments.interface,
+        )
+    except DiscoveryError as error:
+        print(f"Discovery failed: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+    if arguments.json:
+        print(json.dumps([service.to_dict() for service in services], ensure_ascii=False))
+        return
+    if not services:
+        print(f"No LAN Distribution Lab service discovered within {arguments.timeout:.1f} s.")
+        print("Check that the server runs with --discover, the device is on the same subnet,")
+        print(f"and that UDP port {arguments.port} is not blocked by Windows Firewall.")
+        print("Fallback: open http://<LAN-IP>:<HTTP-PORT>/ manually and pair with a one-time code.")
+        return
+    print(f"Discovered {len(services)} service(s):")
+    for service in services:
+        print(f"  {service.service_name}")
+        print(f"    URL: {service.url}")
+        print(f"    Address: {service.address}:{service.http_port}")
+        print(f"    Protocol: v{service.protocol_version}; pairing is still required")
 
 
 def _run_distribute_command(arguments: argparse.Namespace) -> None:
