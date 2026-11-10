@@ -40,7 +40,7 @@
 环境说明：默认 pytest 临时目录遭受权限拒绝（WinError 5），故所有实际 pytest 采用 $LOCALAPPDATA 下独立临时目录和 `--basetemp`；系统 SOCKS 代理使 httpx 本机服务测试误尝试 socksio，因此测试进程临时清除代理变量并设 NO_PROXY=*。两者均为测试环境限制，不是项目功能失败，也未修改系统配置。
 真实设备/网络：NOT_RUN — 本次没有要求也没有执行手机、平板、真实 Wi-Fi/热点/校园网、真实断线、性能/吞吐量测试；`local_loopback` 与 `controller_to_lan` 都不等同于真实独立物理客户端。
 已知限制：单个实验批次顺序执行，尚无跨进程恢复；统计是应用层描述值而非链路带宽或显著性结论；HTTP 无 TLS；真实无线、Windows ACL/reparse-point 和断电一致性仍未验证。
-当前分支、工作区状态、PR：feat/T010-experiment-runner；本记录随 T010 代码/文档提交，推送、PR 与 GitHub Actions 尚未执行（NOT_RUN）。
+当前分支、工作区状态、PR：`feat/T010-experiment-runner`；代码提交 `bfcb4b1ee7677d61ad45d9d036e66fdafd7401b2` 已推送，PR #10 已创建且保持 OPEN（不自动合并）。GitHub Actions：PASS — 分支推送 [run 42786443583](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42786443583/job/129728733699) 2 分 13 秒、PR [run 42786500055](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42786500055/job/129728919019) 1 分 31 秒，均在 Windows / Python 3.12 运行 pytest、前端测试和构建通过。此 CI 状态文档更新将触发新的只含文档提交检查，最终以 PR #10 Checks 为准。
 下一任务：仅在 T010 审查、合并并保留真实 G4 数据边界后，才考虑 T011；不得把本机结果扩写为真实网络结论。
 ```
 
