@@ -3,9 +3,11 @@ from __future__ import annotations
 import errno
 import hashlib
 import http.client
+import http.server
 import io
 import json
 import socket
+import threading
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -214,8 +216,9 @@ def test_full_response_to_resume_isolated_then_restarted(tmp_path: Path) -> None
 
     server._metadata_response = old_then_current_metadata  # type: ignore[method-assign]
     server.force_full_on_range_once = True
-    _downloader(server).download(FILE_ID, output)
+    result = _downloader(server).download(FILE_ID, output)
 
+    assert result.resumed_bytes == 0
     assert output.read_bytes() == server.content
     assert list(tmp_path.glob("versioned.bin.part.stale-*"))
     content_requests = [request for request in server.requests if request.full_url.endswith("/content")]
@@ -229,8 +232,9 @@ def test_416_resume_isolated_and_fresh_download_succeeds(tmp_path: Path) -> None
         _downloader(server).download(FILE_ID, output)
     server.force_416_on_range_once = True
 
-    _downloader(server).download(FILE_ID, output)
+    result = _downloader(server).download(FILE_ID, output)
 
+    assert result.resumed_bytes == 0
     assert output.read_bytes() == server.content
     assert list(tmp_path.glob("range.bin.part.stale-*"))
 
@@ -310,3 +314,278 @@ def test_pairing_exchange_keeps_token_in_memory_and_rejects_bad_target(tmp_path:
         _downloader(server).download("not-a-uuid", tmp_path / "out.bin")
     with pytest.raises(DownloadError):
         ResumableDownloader("http://token@example.test", TOKEN)
+
+
+# ---------------------------------------------------------------------------
+# Real loopback HTTP servers: redirects must never forward credentials
+# ---------------------------------------------------------------------------
+
+
+class _RecordingHttpHandler(http.server.BaseHTTPRequestHandler):
+    """Record every request, then delegate the response to the owning server."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        pass
+
+    def _dispatch(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        record = {
+            "method": self.command,
+            "path": self.path,
+            "headers": {name.lower(): value for name, value in self.headers.items()},
+        }
+        self.server.captured.append(record)  # type: ignore[attr-defined]
+        self.server.responder(self, record)  # type: ignore[attr-defined]
+
+    do_GET = _dispatch
+    do_POST = _dispatch
+
+
+class LocalHttpServer:
+    """A real loopback HTTP server on an ephemeral port that records requests."""
+
+    def __init__(self, responder) -> None:
+        self.captured: list[dict[str, object]] = []
+        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHttpHandler)
+        self._httpd.captured = self.captured  # type: ignore[attr-defined]
+        self._httpd.responder = responder  # type: ignore[attr-defined]
+        self.port = self._httpd.server_address[1]
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+
+    @property
+    def origin(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def paths(self) -> list[str]:
+        return [str(record["path"]) for record in self.captured]
+
+    def close(self) -> None:
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join(timeout=5)
+
+
+def _send_json(handler: _RecordingHttpHandler, status: int, payload: dict[str, object]) -> None:
+    body = json.dumps(payload).encode()
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _send_bytes(
+    handler: _RecordingHttpHandler, status: int, body: bytes, headers: dict[str, str] | None = None
+) -> None:
+    handler.send_response(status)
+    for name, value in (headers or {}).items():
+        handler.send_header(name, value)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _send_redirect(handler: _RecordingHttpHandler, status: int, location: str) -> None:
+    handler.send_response(status)
+    handler.send_header("Location", location)
+    handler.send_header("Content-Length", "0")
+    handler.end_headers()
+
+
+def _metadata_payload(content: bytes) -> dict[str, object]:
+    sha256 = hashlib.sha256(content).hexdigest()
+    return {
+        "file_id": FILE_ID,
+        "etag": f'"sha256:{sha256}"',
+        "size_bytes": len(content),
+        "content_sha256": sha256,
+    }
+
+
+def _file_responder(content: bytes, redirect: tuple[int, str] | None = None):
+    metadata = _metadata_payload(content)
+
+    def respond(handler: _RecordingHttpHandler, record: dict[str, object]) -> None:
+        path = record["path"]
+        if path == f"/api/files/{FILE_ID}":
+            _send_json(handler, 200, metadata)
+        elif path == f"/api/files/{FILE_ID}/content":
+            if redirect is not None:
+                _send_redirect(handler, redirect[0], redirect[1])
+            else:
+                _send_bytes(
+                    handler,
+                    200,
+                    content,
+                    {"ETag": str(metadata["etag"]), "Accept-Ranges": "bytes"},
+                )
+        else:
+            _send_json(handler, 404, {"error": "not_found"})
+
+    return respond
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_redirected_content_is_refused_and_credentials_never_forwarded(
+    status: int, tmp_path: Path
+) -> None:
+    content = b"redirect-guarded-content-" * 200
+    evil = LocalHttpServer(lambda handler, record: _send_json(handler, 200, {"stolen": True}))
+    origin = LocalHttpServer(_file_responder(content, redirect=(status, f"{evil.origin}/collect")))
+    try:
+        output = tmp_path / "redirected.bin"
+        with pytest.raises(ProtocolError) as error:
+            ResumableDownloader(origin.origin, TOKEN, retries=0, progress=lambda *_: None).download(
+                FILE_ID, output
+            )
+
+        assert str(status) in str(error.value)
+        assert TOKEN not in str(error.value)
+        assert evil.captured == [], "a redirect target must never receive a credentialed request"
+        assert not any("authorization" in record["headers"] for record in evil.captured)
+        assert not output.exists(), "a failed download must not publish an incomplete file"
+    finally:
+        origin.close()
+        evil.close()
+
+
+def test_real_local_http_download_still_succeeds(tmp_path: Path) -> None:
+    content = b"legitimate-loopback-content-" * 300
+    server = LocalHttpServer(_file_responder(content))
+    try:
+        output = tmp_path / "legit.bin"
+        result = ResumableDownloader(
+            server.origin, TOKEN, retries=0, progress=lambda *_: None
+        ).download(FILE_ID, output)
+
+        assert output.read_bytes() == content
+        assert result.resumed_bytes == 0
+        assert result.content_sha256 == hashlib.sha256(content).hexdigest()
+        assert any(
+            record["headers"].get("authorization") == f"Bearer {TOKEN}" for record in server.captured
+        )
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize("status", [302, 307])
+def test_pairing_redirect_is_refused_and_code_never_forwarded(status: int) -> None:
+    evil = LocalHttpServer(lambda handler, record: _send_json(handler, 201, {"access_token": "stolen"}))
+
+    def respond(handler: _RecordingHttpHandler, record: dict[str, object]) -> None:
+        if record["path"] == "/api/pairings":
+            _send_redirect(handler, status, f"{evil.origin}/pairing")
+        else:
+            _send_json(handler, 404, {"error": "not_found"})
+
+    origin = LocalHttpServer(respond)
+    try:
+        with pytest.raises(ProtocolError) as error:
+            exchange_cli_pairing_code(origin.origin, "246810")
+
+        assert "246810" not in str(error.value)
+        assert evil.captured == [], "the pairing code must not be forwarded to another origin"
+        assert not any("authorization" in record["headers"] for record in evil.captured)
+    finally:
+        origin.close()
+        evil.close()
+
+
+# ---------------------------------------------------------------------------
+# A complete .part is verified locally instead of being downloaded again
+# ---------------------------------------------------------------------------
+
+
+def test_complete_part_is_verified_and_published_without_content_request(tmp_path: Path) -> None:
+    content = bytes(range(256)) * 300
+    server = FakeFileServer(content, interrupt_first_at=len(content))
+    output = tmp_path / "already-complete.bin"
+
+    with pytest.raises(NetworkError):
+        _downloader(server).download(FILE_ID, output)
+    part_path, state_path = resume_artifact_paths(output)
+    assert part_path.stat().st_size == len(content)
+    assert json.loads(state_path.read_text())["downloaded_bytes"] == len(content)
+    content_requests_before = [
+        request for request in server.requests if request.full_url.endswith("/content")
+    ]
+    assert len(content_requests_before) == 1
+
+    result = _downloader(server).download(FILE_ID, output)
+
+    assert result.size_bytes == len(content)
+    assert result.resumed_bytes == len(content)
+    assert output.read_bytes() == content
+    content_requests_after = [
+        request for request in server.requests if request.full_url.endswith("/content")
+    ]
+    assert len(content_requests_after) == 1, "the complete .part must not be downloaded again"
+    assert not part_path.exists()
+    assert not state_path.exists()
+
+
+def test_complete_empty_part_is_published_without_content_request(tmp_path: Path) -> None:
+    server = FakeFileServer(b"", interrupt_first_at=0)
+    output = tmp_path / "empty-complete.bin"
+
+    with pytest.raises(NetworkError):
+        _downloader(server).download(FILE_ID, output)
+    part_path, _ = resume_artifact_paths(output)
+    assert part_path.exists() and part_path.stat().st_size == 0
+    content_requests_before = [
+        request for request in server.requests if request.full_url.endswith("/content")
+    ]
+    assert len(content_requests_before) == 1
+
+    result = _downloader(server).download(FILE_ID, output)
+
+    assert result.size_bytes == 0
+    assert result.resumed_bytes == 0
+    assert output.read_bytes() == b""
+    content_requests_after = [
+        request for request in server.requests if request.full_url.endswith("/content")
+    ]
+    assert len(content_requests_after) == 1
+    assert not part_path.exists()
+
+
+def test_complete_part_with_wrong_hash_is_isolated_and_not_published(tmp_path: Path) -> None:
+    content = b"complete-but-corrupt" * 500
+    server = FakeFileServer(content, interrupt_first_at=len(content))
+    output = tmp_path / "corrupt-complete.bin"
+
+    with pytest.raises(NetworkError):
+        _downloader(server).download(FILE_ID, output)
+    part_path, _ = resume_artifact_paths(output)
+    assert part_path.stat().st_size == len(content)
+    part_path.write_bytes(b"X" + part_path.read_bytes()[1:])
+
+    with pytest.raises(IntegrityError):
+        _downloader(server).download(FILE_ID, output)
+
+    assert not output.exists()
+    assert list(tmp_path.glob("corrupt-complete.bin.part.stale-*"))
+
+
+# ---------------------------------------------------------------------------
+# resumed_bytes only counts data reused by the successful download
+# ---------------------------------------------------------------------------
+
+
+def test_version_change_restarts_from_zero_and_resets_resumed_bytes(tmp_path: Path) -> None:
+    server = FakeFileServer(b"version-one-" * 400, interrupt_first_at=120)
+    output = tmp_path / "version-change.bin"
+    with pytest.raises(NetworkError):
+        _downloader(server).download(FILE_ID, output)
+
+    server.content = b"version-two-is-different" * 300
+    result = _downloader(server).download(FILE_ID, output)
+
+    assert result.resumed_bytes == 0
+    assert output.read_bytes() == server.content
+    assert list(tmp_path.glob("version-change.bin.part.stale-*"))

@@ -2,6 +2,9 @@
 
 The client intentionally keeps Bearer credentials in process memory only.  The
 adjacent resume state contains object/version information, never a credential.
+Every request is pinned to the configured server: redirects are never followed,
+so a hostile or misconfigured peer cannot move a credential-bearing request to
+another host, port or scheme.
 """
 
 from __future__ import annotations
@@ -20,13 +23,36 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 CHUNK_BYTES = 64 * 1024
 MAX_METADATA_BYTES = 64 * 1024
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _CONTENT_RANGE_RE = re.compile(r"bytes ([0-9]+)-([0-9]+)/([0-9]+)")
+# urllib's redirect handler replays the original request headers (including
+# ``Authorization``) at the target location.  The CLI therefore refuses every
+# redirect instead of trusting that it points at the same host, port or scheme.
+_REDIRECT_STATUSES = frozenset({300, 301, 302, 303, 305, 307, 308})
+_REDIRECT_MESSAGE = (
+    "Server returned an HTTP {status} redirect; the client refuses to forward "
+    "credentials, pairing data or content requests to another location."
+)
+
+
+class _RefuseRedirects(HTTPRedirectHandler):
+    """Leave every 3xx response unhandled so the caller can reject it safely."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+_DEFAULT_OPENER = build_opener(_RefuseRedirects())
+
+
+def _safe_opener(request: Request, *, timeout: float) -> Any:
+    """Default opener used by both metadata/content and pairing requests."""
+    return _DEFAULT_OPENER.open(request, timeout=timeout)
 
 
 class DownloadError(RuntimeError):
@@ -103,7 +129,7 @@ class ResumableDownloader:
         *,
         timeout_seconds: float = 15.0,
         retries: int = 2,
-        opener: Opener = urlopen,
+        opener: Opener = _safe_opener,
         progress: ProgressReporter | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -134,9 +160,25 @@ class ResumableDownloader:
             if _matches_metadata(output, metadata):
                 return DownloadResult(output, metadata.size_bytes, metadata.content_sha256, metadata.size_bytes)
         state = self._prepare_state(output, part_path, state_path, metadata)
+        # Only bytes that already existed on disk when this run started can be
+        # reported as reused; a forced restart (200/416/version change) resets
+        # this counter so the statistics describe the successful download only.
         resumed_bytes = state.downloaded_bytes
         restart_count = 0
         retry_count = 0
+
+        if _partial_covers_object(part_path, state, metadata):
+            # A previous run may have written every byte and then stopped before
+            # its final SHA-256 check or publication.  Verify and publish that
+            # data instead of re-requesting the whole object.
+            self._verify_and_publish(output, part_path, state_path, state, metadata)
+            self._progress(metadata.size_bytes, metadata.size_bytes)
+            return DownloadResult(
+                output_path=output,
+                size_bytes=metadata.size_bytes,
+                content_sha256=metadata.content_sha256,
+                resumed_bytes=resumed_bytes,
+            )
 
         while True:
             try:
@@ -158,6 +200,7 @@ class ResumableDownloader:
                 _write_state(state_path, state)
                 restart_count += 1
                 retry_count = 0
+                resumed_bytes = 0
             except NetworkError:
                 if retry_count >= self.retries:
                     raise
@@ -331,11 +374,24 @@ class ResumableDownloader:
             request_headers.update(headers)
         request = Request(f"{self.server}{path}", data=data, headers=request_headers, method=method)
         try:
-            return self._opener(request, timeout=self.timeout_seconds)
-        except HTTPError as response:
-            return response
+            response = self._opener(request, timeout=self.timeout_seconds)
+        except HTTPError as error_response:
+            response = error_response
         except (URLError, socket.timeout, TimeoutError, OSError) as error:
             raise NetworkError("Network request failed or timed out.") from error
+        _reject_redirect(response)
+        return response
+
+
+def _reject_redirect(response: _Response) -> None:
+    """Fail closed instead of replaying credentials or pairing data elsewhere."""
+    status = getattr(response, "status", None)
+    if status in _REDIRECT_STATUSES:
+        message = _REDIRECT_MESSAGE.format(status=status)
+        try:
+            response.close()
+        finally:
+            raise ProtocolError(message)
 
 
 def normalize_server(value: str) -> str:
@@ -356,7 +412,7 @@ def exchange_cli_pairing_code(
     *,
     timeout_seconds: float = 15.0,
     device_label: str | None = None,
-    opener: Opener = urlopen,
+    opener: Opener = _safe_opener,
 ) -> str:
     """Obtain a CLI token in memory from a locally prompted one-time code."""
     if timeout_seconds <= 0:
@@ -377,6 +433,7 @@ def exchange_cli_pairing_code(
         response = error
     except (URLError, socket.timeout, TimeoutError, OSError) as error:
         raise NetworkError("Pairing request failed or timed out.") from error
+    _reject_redirect(response)
     try:
         if response.status != 201:
             raise _http_error(response, "Pairing was rejected.")
@@ -438,6 +495,16 @@ def _state_matches_metadata(state: ResumeState, server: str, metadata: FileMetad
         and state.content_sha256 == metadata.content_sha256
         and 0 <= state.downloaded_bytes <= metadata.size_bytes
     )
+
+
+def _partial_covers_object(part_path: Path, state: ResumeState, metadata: FileMetadata) -> bool:
+    """True when the saved partial already contains the whole object payload."""
+    if state.downloaded_bytes != metadata.size_bytes:
+        return False
+    try:
+        return part_path.is_file() and part_path.stat().st_size == metadata.size_bytes
+    except OSError as error:
+        raise _local_write_error(error) from error
 
 
 def _completed_output_matches(
