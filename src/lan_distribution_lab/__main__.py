@@ -39,6 +39,15 @@ from .distribution import (
     write_result_json,
 )
 from .distribution_store import DistributionStore
+from .experiment import (
+    MAX_ROUNDS,
+    ExperimentConfig,
+    ExperimentError,
+    ExperimentRunner,
+    parse_strategies,
+    prepare_experiment_directory,
+    validate_config,
+)
 from .runtime import Runtime
 
 
@@ -194,6 +203,36 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="SQLite distribution record path (default: <output-dir>/distribution-runs.db)",
     )
+
+    experiment = commands.add_parser(
+        "experiment", help="run repeatable local-controller distribution trials and export raw records"
+    )
+    experiment.add_argument("--server", required=True, help="bare http(s) server address")
+    experiment.add_argument(
+        "--file-id", action="append", required=True, dest="file_ids",
+        help=f"file UUID to test; repeatable (maximum 4)",
+    )
+    experiment.add_argument(
+        "--strategies", default="sequential,parallel,controlled",
+        help="comma-separated ordered strategies (sequential,parallel,controlled)",
+    )
+    experiment.add_argument("--clients", type=int, default=2, help=f"logical clients (1-{MAX_CLIENTS})")
+    experiment.add_argument(
+        "--max-concurrent", type=int, default=2,
+        help="controlled-only fixed limit; required when controlled is selected",
+    )
+    experiment.add_argument("--rounds", type=int, default=1, help=f"repetitions per file/strategy (1-{MAX_ROUNDS})")
+    experiment.add_argument("--output-dir", type=Path, required=True, help="new, empty experiment result directory")
+    experiment.add_argument("--timeout", type=float, default=15.0)
+    experiment.add_argument("--retries", type=int, default=2)
+    experiment.add_argument(
+        "--environment-type", choices=("local_loopback", "controller_to_lan"), default="local_loopback",
+        help="actual controller deployment; never labels logical clients as physical devices",
+    )
+    experiment.add_argument("--on-error", choices=("continue", "stop"), default="continue")
+    experiment_credentials = experiment.add_mutually_exclusive_group(required=True)
+    experiment_credentials.add_argument("--pair", action="store_true", help="prompt once per logical client")
+    experiment_credentials.add_argument("--tokens-stdin", action="store_true", help="read one token per client from protected stdin")
     return parser
 
 
@@ -276,6 +315,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if arguments.command == "distribute":
         _run_distribute_command(arguments)
+        return
+
+    if arguments.command == "experiment":
+        _run_experiment_command(arguments)
         return
 
     if arguments.command == "discover":
@@ -442,6 +485,45 @@ def _run_distribute_command(arguments: argparse.Namespace) -> None:
     print(f"Result JSON: {results_path}")
     print(f"Records: {store.path}")
     if counts["succeeded"] != len(run.clients):
+        raise SystemExit(1)
+
+
+def _run_experiment_command(arguments: argparse.Namespace) -> None:
+    try:
+        strategies = parse_strategies(arguments.strategies)
+        max_concurrent = arguments.max_concurrent if "controlled" in strategies else None
+        config = ExperimentConfig(
+            server=arguments.server,
+            file_ids=tuple(arguments.file_ids),
+            strategies=strategies,
+            clients=arguments.clients,
+            max_concurrent=max_concurrent,
+            rounds=arguments.rounds,
+            timeout_seconds=arguments.timeout,
+            retries=arguments.retries,
+            environment_type=arguments.environment_type,
+            on_error=arguments.on_error,
+        )
+        validate_config(config)
+        output_dir = prepare_experiment_directory(arguments.output_dir)
+        # The distribution token reader already enforces one distinct, in-memory
+        # token per logical client and never prints them.
+        tokens = _gather_client_tokens(arguments)
+        runner = ExperimentRunner(config, tokens, output_dir)
+        runner.run()
+    except (ExperimentError, DistributionError, DownloadError) as error:
+        print(f"Experiment failed: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except KeyboardInterrupt:
+        print("Experiment interrupted; completed trial records were persisted.", file=sys.stderr)
+        raise SystemExit(130) from None
+    print(f"Experiment {runner.experiment_id} state={runner.state}: {output_dir}")
+    print("Exports: experiments.json, trials.csv, clients.csv and trials/<trial>/distribution-result.json")
+    if runner.state != "completed":
+        print(
+            f"Experiment is incomplete ({runner.state}); result files were kept at: {output_dir}",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
 

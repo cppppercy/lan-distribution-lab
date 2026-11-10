@@ -2,7 +2,7 @@
 
 面向局域网的可靠文件传输与多终端协同分发系统（课程项目）。
 
-> 项目状态：T004 已提供 Vue Web 界面、同源静态托管和显式 LAN 启动方式；T006 提供 Python CLI 的安全下载续传（已合并）；T007 提供本机多客户端顺序/并发分发控制与运行记录（已合并）；T008 提供固定并发上限的受控分发（controlled）与三种策略的实验入口。真实手机/平板互通仍须由用户按本文步骤验证。默认服务仍只监听本机。
+> 项目状态：T004 已提供 Vue Web 界面、同源静态托管和显式 LAN 启动方式；T006 提供 Python CLI 的安全下载续传；T007/T008 提供本机多客户端分发及固定并发控制；T009 提供可选 UDP 发现；T010 提供可重复的控制器侧实验驱动与 CSV/JSON 原始数据导出。真实网络实验仍未执行，默认服务仍只监听本机。
 
 ## 项目目标
 
@@ -150,6 +150,26 @@ python -m lan_distribution_lab distribute `
 ```
 
 每个客户端写入 `--output-dir/client-<n>/<--output-name>`（默认 `download.bin`），互不覆盖；若目标文件已存在且内容不同，该客户端失败而不会覆盖用户文件。**同一次分发中的多个客户端必须使用不同的 Bearer token**，重复凭据会在下载开始前被拒绝且错误信息不回显 token；`--pair` 为每个逻辑客户端使用独立的一次性配对码。`--max-concurrent N` 仅用于 `controlled`，N 必须为 1..客户端数且不超过安全上限；缺失或误用于其他策略会在下载开始前报错。`--results` 与 `--records` 会在下载启动前做规范化路径校验（解析 `..`、符号链接别名与 Windows 大小写差异）：两者不得使用同一路径，也不得与任何客户端目标、`.part` 或 `.part.json` 冲突；冲突时立即失败，不启动下载、不写结果、不改变已有文件。结果写入 `--output-dir/distribution-result.json`（原子替换；`schema_version: 2`，含 `run_id`、策略、`scheduling.max_concurrent`/`observed_max_active`、文件 SHA-256、每个客户端的排队时间戳/`wait_seconds`/执行时间/字节数/复用字节/安全错误类型，以及成功/失败/取消汇总；v1 字段语义不变），并追加独立 SQLite 记录 `--output-dir/distribution-runs.db`（只追加；打开 T007 旧库时原地迁移并保留历史记录）。`--stop-on-error` 只适用于 `sequential`，会把未开始的客户端标记为 `cancelled`。客户端数上限为 8；`parallel`/`controlled` 的真实重叠由本机服务器同时在途请求测试证明，但这不等于真实多设备分发。排队等待、客户端执行时间与批次总耗时是三个独立指标，测试不据此宣称某种策略更快。
+
+### 可重复分发实验（T010）
+
+`experiment` 复用既有下载器和三种分发策略，按固定顺序 `round → file_id → strategy` 逐轮执行；每轮使用新的目录，所以完整下载不会因已有目标文件或 T006 缓存被跳过。它只创建**本机控制器中的逻辑客户端**，即使服务器使用 LAN 地址，也不能据此称为手机、平板或真实 Wi-Fi 实验。
+
+```powershell
+# 先为 3 个逻辑客户端各创建一个独立的 read 配对码。
+python -m lan_distribution_lab experiment `
+  --server http://127.0.0.1:8000 `
+  --file-id 12345678-1234-5678-1234-567812345678 `
+  --strategies sequential,parallel,controlled `
+  --clients 3 --max-concurrent 2 --rounds 3 `
+  --environment-type local_loopback `
+  --output-dir .\experiments\baseline-001 `
+  --pair
+```
+
+`--pair` 会无回显地依次要求输入 3 个一次性配对码，所得 Bearer token 仅在这次进程内存中复用，不写入命令行、日志或导出文件。若调用方已安全管理 stdin，也可用 `--tokens-stdin` 提供恰好 N 行不同 token。`--file-id` 可重复指定（最多 4 个）；客户端最多 8 个、轮次最多 10、总 trial 最多 100。`controlled` 才允许 `--max-concurrent`，取值必须在 1..客户端数内。
+
+输出目录必须是从未存在的新目录，结构固定为 `experiments.json`、`trials.csv`、`clients.csv` 和 `trials/trial-<序号>/distribution-result.json`（成功 trial 的原始 `DistributionRun`）。`trials.csv` 的 `application_payload_bytes` 是成功客户端数 × 文件大小，`application_payload_throughput_Bps` 是该值除以批次 `duration_seconds`，只表示应用层有效载荷/批次墙钟时间，**不是**链路带宽。`experiments.json` 含环境标签、Git/Python/平台、试验索引和按策略的描述性统计；成功率使用全部 trial，时间/吞吐量统计只使用完全成功的 trial。**只有全部计划 trial 均成功时整体 `state` 才为 `completed`，且 CLI 返回 0。**continue 模式会继续后续轮次，但任一失败会使整体为 `completed_with_failures` 并返回非零；stop 模式会把未开始轮次标为取消，整体为 `completed_with_cancelled_trials` 并返回非零。两种非完整成功情形都会先打印输出目录并保留已生成 JSON/CSV；Ctrl+C 则记录 `interrupted` 并返回 130。真实 Wi-Fi/设备验证步骤与数据字典见 [实验记录](docs/EXPERIMENTS.md)。
 
 ### UDP 局域网发现（T009，可选）
 

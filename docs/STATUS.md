@@ -1,7 +1,7 @@
 # 当前项目状态
 
 **更新日期**：2026-11-10
-**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 的 Python CLI 安全续传已在审核补修后合并（PR #6）；T007 多客户端分发已合并（PR #7）；T008 受控并发调度已合并（PR #8）；T009 UDP 局域网发现已实现，等待 PR 审查。
+**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 Python CLI 安全续传、T007 分发、T008 受控并发和 T009 UDP 发现均已合并。T010 的控制器侧可重复实验驱动与数据导出已实现、完成本地自动化回归，等待审查；真实 G4 网络实验仍为 NOT_RUN。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
@@ -10,7 +10,7 @@
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
-- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，已合并）**；UDP 局域网发现与 `discover` CLI：**IMPLEMENTED（T009，待审查）**；P2P：**NOT_IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，已合并）**；UDP 局域网发现与 `discover` CLI：**IMPLEMENTED（T009，已合并）**；控制器侧实验计划、CSV/JSON 原始数据与描述统计：**IMPLEMENTED（T010，待审查）**；P2P：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
 - 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
@@ -26,8 +26,24 @@
 - **T006 — DONE**：Python CLI `.part`/无秘密状态、Range/If-Range 恢复、强响应校验、SHA-256 发布、自动化故障测试与 2026-11-10 审核补修已完成；PR #6 已合并至 main（合并提交 `dbe69d116fb6ecf15b0b7d1c9dae842d3b2c5a55`）。
 - **T007 — DONE**：`python -m lan_distribution_lab distribute` 控制器、sequential/parallel 策略、每客户端独立凭据与独立输出、运行级 JSON 与独立 SQLite 分发记录、审核补修已完成；PR #7 已合并至 main（合并提交 `155462e5324f915645f490b02847fa3a5e46addf`）。
 - **T008 — DONE**：controlled 固定并发策略（`--max-concurrent`）、FIFO 排队、等待/执行/批次计时拆分、JSON schema v2、T007 SQLite 原地迁移与 11 项新测试已完成；PR #8 已合并至 main（合并提交 `fa698871e12f650bea5a1b32da322b217aa662e4`）。
-- **T009 — IN_PROGRESS**：可选 UDP 局域网发现 responder、`discover` CLI、request_id/来源 IP/版本校验、去重排序、限速与 14 项新测试已实现；`scripts/start-lan.ps1` 支持显式 `-EnableDiscovery`；等待 PR 审查。
-- 下一关卡：T009 审查通过后可进入 T010；T004 的剩余真实设备项目仍须如实补验。
+- **T009 — DONE**：可选 UDP 局域网发现 responder、`discover` CLI、request_id/来源 IP/版本校验、去重排序、限速与 14 项测试已合并至 main（`1d2c131ecc71ed3e8d49428e7a51318993681ee1`）；真实广播仍 NOT_RUN。
+- **T010 — IN_PROGRESS（实现与本地自动化完成，待审查）**：`experiment` CLI 以有界、确定顺序复用既有分发，保留每轮原始 JSON 与 CSV/manifest，记录失败/取消/中断且不写凭据。整体状态仅在全部计划 trial 成功时为 `completed`；失败或取消会返回非零 CLI 退出码而不删除导出。真实手机/平板/无线 G4 数据仍 NOT_RUN。
+- 下一关卡：T010 审查和合并后才可进入 T011；T004/G1 与 T010/G4 的剩余真实设备项目仍须如实补验。
+
+## T010 验证记录（2026-11-10）
+
+```text
+任务：T010 — 可重复网络实验驱动与数据采集
+基线 SHA：1d2c131ecc71ed3e8d49428e7a51318993681ee1（PR #9 合并后的 main）
+实际代码变化：新增 experiment.py 和 `python -m lan_distribution_lab experiment`。它以固定 round→file_id→strategy 顺序、UUID experiment/trial ID 和客户端/轮次/文件/总 trial 有界配置复用 run_distribution()；一次启动时收集每个逻辑客户端独立的内存凭据，后续轮次复用但不落盘。每轮使用全新的 trial 目录，成功时保留原始 DistributionRun JSON，根目录原子导出 experiments.json、trials.csv、clients.csv，含环境标签、Git/Python/平台、字段单位和描述性统计。整体状态只有全部计划 trial 成功时才为 `completed`；`--on-error continue` 的失败为 `completed_with_failures`，`--on-error stop` 的失败与未开始取消记录为 `completed_with_cancelled_trials`。普通不完整状态会保留全部原始 JSON/CSV/manifest、打印输出目录并让 CLI 返回 1；Ctrl+C 仍记录 `interrupted` 并返回 130。错误文本和凭据不进入导出。
+本地验证：PASS — `python -m compileall -q src tests`；`python -m lan_distribution_lab experiment --help`；`tests/test_experiment_runner.py` 12 passed（含 continue 的成功/失败/成功、stop 的失败/取消记录和 CLI 非零退出）；完整 Python 套件在禁用仅影响本机测试的代理变量、使用独立临时目录后按两个互斥测试组完成：认证/LAN/分发/实验驱动 76 passed in 23.86s；文件 API/健康/续传/UDP/Web 75 passed, 1 skipped, 1 warning in 14.14s（合计 151 passed, 1 skipped, 1 warning）。skip 是此 Windows 环境不允许创建符号链接。`python -m pip check`：No broken requirements found。`npm --prefix web run test`：2 passed；`npm --prefix web run build`：通过。`git diff --check`：通过。
+CI 补修验证：GitHub Windows runner 曾暴露 `test_controlled_real_sessions_are_independent` 的测试竞态：客户端已读完响应，但服务端流式生成器的 SQLite 完成记录尚未提交。测试现等待最多 2 秒的可观测完成状态，不改变服务端或客户端下载语义；本机连续运行该用例 5 次均通过，完整 `tests/test_distribution.py` 为 37 passed in 17.29s。此补修后新的 PR #10 CI 以 Checks 的最终状态为准。
+环境说明：默认 pytest 临时目录遭受权限拒绝（WinError 5），故所有实际 pytest 采用 $LOCALAPPDATA 下独立临时目录和 `--basetemp`；系统 SOCKS 代理使 httpx 本机服务测试误尝试 socksio，因此测试进程临时清除代理变量并设 NO_PROXY=*。两者均为测试环境限制，不是项目功能失败，也未修改系统配置。
+真实设备/网络：NOT_RUN — 本次没有要求也没有执行手机、平板、真实 Wi-Fi/热点/校园网、真实断线、性能/吞吐量测试；`local_loopback` 与 `controller_to_lan` 都不等同于真实独立物理客户端。
+已知限制：单个实验批次顺序执行，尚无跨进程恢复；统计是应用层描述值而非链路带宽或显著性结论；HTTP 无 TLS；真实无线、Windows ACL/reparse-point 和断电一致性仍未验证。
+当前分支、工作区状态、PR：`feat/T010-experiment-runner`；代码提交 `bfcb4b1ee7677d61ad45d9d036e66fdafd7401b2` 已推送，PR #10 已创建且保持 OPEN（不自动合并）。GitHub Actions：PASS — 分支推送 [run 42786443583](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42786443583/job/129728733699) 2 分 13 秒、PR [run 42786500055](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42786500055/job/129728919019) 1 分 31 秒，均在 Windows / Python 3.12 运行 pytest、前端测试和构建通过。此 CI 状态文档更新将触发新的只含文档提交检查，最终以 PR #10 Checks 为准。
+下一任务：仅在 T010 审查、合并并保留真实 G4 数据边界后，才考虑 T011；不得把本机结果扩写为真实网络结论。
+```
 
 ## T009 验证记录（2026-11-10）
 

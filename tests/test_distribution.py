@@ -1394,7 +1394,19 @@ def test_controlled_real_sessions_are_independent(tmp_path: Path, real_environme
     assert run.counts()["succeeded"] == 3
     for task in tasks:
         assert task.output_path.read_bytes() == content
-    transfers = _download_transfers(environment)
+    # The client has received and closed each HTTP response at this point, but
+    # Uvicorn completes the synchronous streaming generator (and commits its
+    # transfer record) on its worker thread immediately afterwards.  Poll the
+    # observable server state rather than racing that finalizer on busy Windows
+    # CI hosts.
+    deadline = time.monotonic() + 2.0
+    while True:
+        transfers = _download_transfers(environment)
+        if len(transfers) == 3 and all(row["state"] == "completed" for row in transfers):
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
     assert len(transfers) == 3
     assert all(row["state"] == "completed" for row in transfers)
     assert {row["session_id"] for row in transfers} == {

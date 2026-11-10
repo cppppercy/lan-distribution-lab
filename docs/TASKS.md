@@ -18,9 +18,8 @@
 | T006 | DONE | Python CLI 断点续传、失败恢复、完整性验证已实现；审核补修后 PR #6 已合并 | G2 | T005 |
 | T007 | DONE | 多客户端顺序/并发分发、独立会话任务记录与 JSON/SQLite 运行记录已实现；审核补修后 PR #7 已合并 | G3 | T006 |
 | T008 | DONE | 受控并发调度（controlled、--max-concurrent）、调度记录与 SQLite 迁移已实现；审核通过后 PR #8 已合并 | G3 | T007 |
-| T009 | IN_PROGRESS | UDP 局域网发现、`discover` CLI、安全校验与连接体验已实现；等待 PR 审查 | G3 | T008 |
-| T009 | TODO | UDP 桌面发现、连接回退及设备授权体验 | G3 | G1 稳定后 |
-| T010 | TODO | 自动化实验驱动、数据记录、真实设备测试 | G4 | T008 |
+| T009 | DONE | UDP 局域网发现、`discover` CLI、安全校验与连接体验已合并；真实广播仍待人工验证 | G3 | T008 |
+| T010 | IN_PROGRESS | 自动化实验驱动与数据记录已实现并待审查；真实设备/网络 G4 测试仍为 NOT_RUN | G4 | T008 |
 | T011 | TODO | 抓包与网络理论分析、性能图表和局限性评估 | G4 | T010 |
 | T012 | TODO | 稳定版本打包、完整使用说明、课程报告素材 | G5 | G4 |
 
@@ -138,13 +137,25 @@
 
 ### T009（UDP 局域网发现与连接体验）
 
-**完成内容（待审查）**：新增可选 UDP 局域网发现。`serve --discover --host <私有 IPv4>` 才启动独立 UDP responder（默认 47800，`--discover-bind` 默认 `0.0.0.0`），HTTP 监听保持原有显式私有/回环限制；未启用时不开 UDP。协议为有界 UTF-8 JSON 单请求/单响应：请求含协议名/版本/type/随机 request_id；响应回显 request_id，并含非秘密 instance_id、service_name、http_port、requires_pairing 与 features；请求与响应各 ≤ 1 KiB，字段长度受限，不含 token/Cookie/配对码/密钥/路径/文件信息。响应端只接受私有/回环来源，校验协议、版本与 request_id，并做每来源速率限制与来源数量上限。新增 `python -m lan_distribution_lab discover`：IPv4 目标可重复指定（默认 255.255.255.255）、可绑定本地网卡地址、有限超时、去重排序、拒绝版本/request_id 不匹配及超大/非法包；以 UDP 源 IP + http_port 构造 URL，不信任正文 URL，不自动认证或下载。`scripts/start-lan.ps1` 增加 `-EnableDiscovery`/`-DiscoveryPort`，默认关闭；手机/平板继续手动访问 URL 并用六位配对码认证，二维码未实现。
+**完成内容（已合并）**：新增可选 UDP 局域网发现。`serve --discover --host <私有 IPv4>` 才启动独立 UDP responder（默认 47800，`--discover-bind` 默认 `0.0.0.0`），HTTP 监听保持原有显式私有/回环限制；未启用时不开 UDP。协议为有界 UTF-8 JSON 单请求/单响应：请求含协议名/版本/type/随机 request_id；响应回显 request_id，并含非秘密 instance_id、service_name、http_port、requires_pairing 与 features；请求与响应各 ≤ 1 KiB，字段长度受限，不含 token/Cookie/配对码/密钥/路径/文件信息。响应端只接受私有/回环来源，校验协议、版本与 request_id，并做每来源速率限制与来源数量上限。新增 `python -m lan_distribution_lab discover`：IPv4 目标可重复指定（默认 255.255.255.255）、可绑定本地网卡地址、有限超时、去重排序、拒绝版本/request_id 不匹配及超大/非法包；以 UDP 源 IP + http_port 构造 URL，不信任正文 URL，不自动认证或下载。`scripts/start-lan.ps1` 增加 `-EnableDiscovery`/`-DiscoveryPort`，默认关闭；手机/平板继续手动访问 URL 并用六位配对码认证，二维码未实现。
 
 **验收证据（本地）**：新增 `tests/test_udp_discovery.py` 14 项：loopback 请求/响应与 URL 构造、响应字段/大小/无秘密、非法请求被忽略且服务仍响应、request_id/版本/来源/超大响应校验、重复与恶意响应的去重排序、发现请求不含凭据、超时快速返回、UDP 端口冲突与关闭后释放、限速器窗口与来源上限、地址/服务名校验、serve 发现开关与参数校验、CLI 无结果回退提示、JSON 输出与错误退出。完整套件/CI 结果见 `docs/STATUS.md`。
 
 **真实网络**：NOT_RUN — 本机 loopback UDP 成功不等于真实 Wi-Fi/热点广播发现；Windows 防火墙、校园 Wi-Fi 客户端隔离、多网卡选择需人工实验。
 
 **非目标**：P2P、UDP 承载文件、跨公网/跨 VLAN 自动发现、UPnP/NAT 穿透、自动防火墙、HTTPS、远程控制、二维码（未实现）、T010 正式性能实验。
+
+**合并状态（2026-11-10）**：PR #9 已合并至 main，合并提交 `1d2c131ecc71ed3e8d49428e7a51318993681ee1`；任务状态为 DONE，真实广播验证继续保持 NOT_RUN。
+
+### T010（可重复网络实验驱动与数据采集）
+
+**完成内容（待审查）**：新增 `python -m lan_distribution_lab experiment`，复用既有 `run_distribution()` 与安全下载器。它支持多个 file_id、sequential/parallel/controlled、客户端数、受控上限、轮次、continue/stop 故障策略以及 `local_loopback`/`controller_to_lan` 环境标签；用固定 `round → file_id → strategy` 顺序和 UUID experiment/trial ID 执行有界计划。每轮使用新的 `trials/trial-<序号>` 目录，成功轮保留原始 `DistributionRun` JSON，根目录原子导出 `experiments.json`、`trials.csv`、`clients.csv` 及描述性统计。每个逻辑客户端仅用独立内存 Bearer 凭据；凭据不进命令行、导出、日志或 SQLite。失败、取消、Ctrl+C 和导出失败不虚构成功，已有结果即时持久化。
+
+**验收证据（本地）**：`tests/test_experiment_runner.py` 覆盖单轮原始 JSON/CSV/hash、三策略三轮的确定顺序和全新下载、多文件唯一 trial、客户端/整轮失败、continue/stop、轮次/上限/重复凭据/已有目录拒绝、凭据脱敏、Ctrl+C 与导出失败状态。完整回归与 CI 结果见 `docs/STATUS.md`。
+
+**真实 G4**：NOT_RUN — 此任务只提供本机控制器工具和可控 HTTP 自动化，不执行也不声称手机、平板、真实 Wi-Fi/热点、校园网、断线或网络吞吐量实验。关键真实对照仍需固定变量至少三轮并保留原始目录。
+
+**非目标**：T011 抓包/网络理论分析/图表、T012 打包报告、新传输协议、P2P/UDP 文件传输、新调度策略、HTTPS/公网/防火墙操作和大规模 Vue 重构。
 
 ### T003 及后续任务共同模板
 

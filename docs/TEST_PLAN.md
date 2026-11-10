@@ -1,13 +1,13 @@
 # 测试计划与需求追踪（T002 设计）
 
-**状态**：T003-A/B、T005 单范围下载与 T006 Python CLI 续传已实施并运行自动化测试；平板及其余真实设备/网络实验仍未运行。每个用例只有在对应阶段真正执行并保留证据后才能标为 PASS。
+**状态**：T003-A/B、T005 单范围下载、T006 Python CLI 续传、T007/T008 分发控制、T009 UDP 发现与 T010 控制器侧实验驱动均已实施并运行自动化测试；平板及其余真实设备/网络实验仍未运行。每个用例只有在对应阶段真正执行并保留证据后才能标为 PASS。
 
 ## 1. 执行原则
 
 - 自动化用例使用 pytest、临时目录、合成内容和可注入的磁盘/时钟/网络故障；CI 不依赖真实手机、Wi-Fi、外部服务、密钥或付费 API（NFR-007）。
 - 本机 TestClient、多进程或 loopback 测试只说明程序行为，不得作为手机/平板/真实 Wi-Fi 成功证据（ADR-003、NFR-009）。
 - 文件用例必须验证 HTTP 状态、统一错误 `code`、磁盘可见对象、元数据、SHA-256 及临时文件清理；不可只断言“无异常”。
-- 除现有 T001 测试外，下表均为 `DESIGNED / NOT_RUN`。实施任务完成后将用例 ID、命令、Git SHA、日志/实验原始数据路径写入 `docs/STATUS.md` 与 `docs/EXPERIMENTS.md`。
+- 下表保留设计时的阶段标签；已实施项目的实际 PASS/NOT_RUN 证据以第 5 节与 `docs/STATUS.md`、`docs/EXPERIMENTS.md` 为准，不能由测试计划本身推定通过。
 
 ## 2. 测试矩阵
 
@@ -44,6 +44,12 @@
 | TP-092 | FR-108, NFR-003 | 多服务去重排序、超时与资源释放 | 重复/无效包与端口冲突 | 同一请求触发重复与恶意响应；无服务时超时；端口冲突与关闭 | 去重排序正确；超时快速返回；端口冲突明确；关闭后端口可重新绑定 | 自动化 loopback / T009 |
 | TP-093 | FR-108, NFR-001 | 发现仅显式启用且不放宽 HTTP | CLI 参数与本机 socket | 默认 serve；`--discover` 搭配 loopback/非法端口/非法绑定；CLI 目标与网卡参数 | 默认不开 UDP；非法组合提前报错；多目标/网卡参数校验 | 自动化参数与配置 / T009 |
 | TP-094 | FR-108, NFR-005 | 发现不泄露凭据、不触发自动认证/传输 | 捕获请求/响应 | 发起发现并检查数据包与结果 | 请求无 Bearer/Cookie/配对码；结果仅为候选且 requires_pairing=true；无 HTTP 自动调用 | 自动化 / T009 |
+| TP-100 | FR-105, FR-106, NFR-008 | 单策略单轮实验的原始记录、SHA-256 与数据字段 | 本机可控 HTTP 服务、合成对象、独立临时目录 | 启动 2 个逻辑客户端的 sequential experiment | 新目录中有 manifest/两 CSV/原始 run JSON；文件 hash、单位/状态/计数一致 | 自动化 / T010 |
+| TP-101 | FR-105, NFR-008 | 三种策略、多轮与全新输出目录 | 同上 | 每策略运行 3 轮；检查服务端请求数和 trial 路径 | 共 9 个唯一 trial，稳定 round→file→strategy 顺序；每轮重新下载，不复用已完成目标 | 自动化 / T010 |
+| TP-102 | FR-105, FR-106 | 多 file_id、失败客户端/整轮失败和 continue/stop | 可控失败下载器或无效凭据 | 多文件多轮；一个客户端失败；整轮失败；分别 continue/stop | 所有已计划 trial 与每客户端记录可追踪；continue 继续，stop 后续为 cancelled；不把失败记为成功 | 自动化 / T010 |
+| TP-103 | FR-106, NFR-005 | 凭据与输出路径安全 | 独立 token、已有目录/文件 | 导出后检索 token；尝试重复 token、已有输出目录/超限参数 | 凭据不在 JSON/CSV；重复凭据与非法限制提前拒绝；原目录不被覆盖 | 自动化 / T010 |
+| TP-104 | FR-106, NFR-003 | Ctrl+C 和导出写失败不产生假成功 | 可注入 KeyboardInterrupt/原子写失败 | 中断当前 trial；模拟第二次导出失败 | manifest 保持 interrupted/running，不产生 completed 假结论；已完成数据仍可读 | 自动化 / T010 |
+| TP-105 | FR-105, NFR-008 | 真实 G4 策略对照的证据边界 | 手机/平板/真实 Wi-Fi 或热点、三轮原始目录 | 固定变量执行多轮，记录设备/网络/hash/失败 | 仅根据实际数据报告；本机逻辑客户端不替代物理设备 | 人工 / T010-G4，NOT_RUN |
 
 ## 3. 测试数据与故障注入规范
 
@@ -80,3 +86,4 @@
 | T004 手机热点基础收发 | PARTIAL_PASS（用户人工） | 2026-11-09，Windows 移动热点，服务 `192.168.137.1:8003`；手机加载 Vue 页面，电脑和手机以独立 read_write 码配对并确认双向收发。校园 Wi-Fi 超时原因未确认；平板、设备/浏览器/文件大小、SHA-256 和断线仍 NOT_RUN。 |
 | T005 Range/If-Range | PASS（本地自动化） | `tests/test_file_api.py` 覆盖 200/206/416、精确/开放/后缀/截断范围、空文件、非法/多范围、未授权、强 ETag If-Range 回退、范围拼接 SHA-256、seek/read 边界和下载槽位释放。 |
 | T006 CLI 续传 | PASS（本地自动化） | `tests/test_resumable_client.py` 覆盖完整 SHA-256、截断流恢复、仅请求缺失范围、200/416 版本重启、错误 206、损坏 partial、空文件、超时、ENOSPC、重复运行、token 不落状态与配对换 token。真实 WLAN 断线仍 NOT_RUN。 |
+| T010 实验驱动 | PASS（本地自动化） | `tests/test_experiment_runner.py` 覆盖单轮导出与 SHA-256、三策略×三轮的新目录/顺序、多文件 trial 身份、客户端失败、continue/stop、配置/输出/凭据边界、Ctrl+C 与导出失败状态；真实 G4 仍 NOT_RUN。 |

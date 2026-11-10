@@ -1,6 +1,6 @@
-# 当前架构（T009 UDP 局域网发现）
+# 当前架构（T010 实验驱动）
 
-**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range、T006 Python CLI 安全续传、T007 多客户端分发、T008 受控并发与 T009 UDP 局域网发现均已实现并经本机自动化测试/构建验证（T009 的真实广播发现未实测）。T004 已获得手机热点基础收发的用户确认；平板、真实 LAN 断线恢复、真实多设备分发与性能实验仍未验证。P2P 未实现。
+**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range、T006 Python CLI 安全续传、T007/T008 分发控制、T009 UDP 发现与 T010 控制器侧可重复实验驱动均已实现并经本机自动化测试/构建验证。T004 已获得手机热点基础收发的用户确认；T009 真实广播、平板、真实 LAN 断线恢复、真实多设备分发与 G4 性能实验仍未验证。P2P 未实现。
 
 ## 组件与数据流
 
@@ -13,6 +13,8 @@ flowchart LR
     client["CLI：Bearer 仅进程内存"] --> api
     distributor["CLI distribute：每客户端独立 Bearer"] --> client
     distributor --> records["分发 JSON + 独立 SQLite 运行记录"]
+    experiment["CLI experiment：固定顺序的 trial 控制器"] --> distributor
+    experiment --> experiment_records["CSV/manifest + 每轮原始 JSON"]
     discover_cli["CLI discover：UDP 探测"] --> udp["UDP discovery responder（opt-in）"]
     udp --> api
     api --> auth["认证、scope、Origin"]
@@ -43,6 +45,7 @@ flowchart LR
 | `client.py` | 标准库 HTTP CLI 客户端；Bearer 内存使用、Range/If-Range 续传、状态验证、SHA-256 与原子发布、元数据预检和鉴权/槽位错误类型 |
 | `distribution.py` | 控制器侧多客户端编排：顺序、普通并发与固定上限受控并发；独立凭据与输出、FIFO 排队、等待/执行计时、JSON 结果与安全错误分类 |
 | `distribution_store.py` | 控制器侧独立 SQLite 分发运行记录（runs/clients），支持 T007 库原地迁移到三种策略且保留历史 |
+| `experiment.py` | T010 实验控制器：验证有界配置、固定轮次/文件/策略顺序、每 trial 全新目录、及时原子导出 manifest/CSV、失败/中断状态和描述性统计；不保存凭据 |
 | `discovery.py` | 可选的 UDP 局域网发现协议：有界 JSON 请求/响应、来源 IP 校验、request_id 回显、去重/排序/超时与限速 |
 | `web/` | Vue 3 + TypeScript + Vite 源码；构建后的 web/dist 由同一 FastAPI 进程提供 |
 
@@ -70,6 +73,14 @@ flowchart LR
 三种策略都复用 T006 的下载路径（独立会话、强 ETag、Range/If-Range、最终 SHA-256、不覆盖已有目标），单个客户端认证失败、超时、断开或槽位不足只影响自身记录。控制器以 `_ActiveCounter` 记录观测到的最大活跃任务数；客户端排队等待、客户端执行时间和批次总耗时分别记录：`queued_at`/`wait_seconds` 为排队等待，客户端 `duration_seconds` 为执行时间，运行级 `duration_seconds` 为批次耗时，均使用 `time.monotonic()`，时间戳为 UTC。
 
 运行记录含唯一 run_id、策略、`max_concurrent`/`observed_max_active`、文件大小/SHA-256、各客户端 task_id/状态/时间/字节/复用字节/安全错误类型，以及成功/失败/取消汇总。JSON 为 `schema_version: 2`（v1 字段语义不变，新增 `scheduling` 与客户端等待字段）。SQLite 库原地迁移：T007 旧库重建 `distribution_runs` 放宽 strategy CHECK 并保留历史行，`distribution_clients` 增加等待列；重复打开幂等，不删除数据库。凭据、Cookie、配对码与私人绝对路径不写入 JSON、SQLite 或日志。控制器运行在一台电脑上，逻辑客户端是独立会话的本机进程，不是真实远程设备。
+
+## 可重复实验驱动（T010）
+
+`python -m lan_distribution_lab experiment` 在一个进程启动时收集 N 个不同的 CLI Bearer 凭据（`--pair` 无回显兑换或安全 `--tokens-stdin`），以后只在进程内存中复用。每个计划单元有 UUID `trial_id`，顺序固定为 `round → file_id → strategy`，不采用未记录的随机化；每个实验也有 UUID `experiment_id`。受控策略必须提供 `1..clients` 的 `max_concurrent`，客户端不超过 8、轮次不超过 10、文件不超过 4、总 trial 不超过 100。
+
+每一个 trial 都在新建的 `trials/trial-<序号>/` 内调用既有 `run_distribution()`；目录中只有成功返回的 `distribution-result.json` 原始记录及每个客户端全新的下载工件，因此不会把已完成缓存计为网络传输。根目录不允许预先存在或为链接，`experiments.json`、`trials.csv`、`clients.csv` 通过同目录临时文件原子替换。失败 trial、停止策略取消的未开始 trial 与 Ctrl+C 中断的当前 trial 都进入 CSV/manifest，绝不计作成功；仅成功 trial 产生原始 DistributionRun JSON。
+
+清单记录数据格式版本、开始/更新时间、配置、环境标签、Git/Python/平台版本、trial 索引和统计。`environment_type=local_loopback` 仅描述本机 loopback；`controller_to_lan` 只描述控制器访问 LAN 服务。两者的逻辑客户端都不是物理移动设备，真实多设备无线实验只能在后续人工记录中如实标注。按策略的 `success_rate` 分母是该策略所有 trial；时间和有效载荷吞吐量的描述性统计仅使用全部客户端成功的 trial。吞吐量定义为 `成功客户端数 × 文件大小 / 批次 duration_seconds`（B/s），不是网卡/链路带宽，也不导出策略优劣结论。
 
 ## UDP 局域网发现（T009）
 
