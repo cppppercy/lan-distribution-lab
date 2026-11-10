@@ -42,7 +42,9 @@
 完整回归：`python -m compileall -q src tests` 通过；`python -m pytest`（Python 3.13.7：125 passed, 1 skipped, 1 warning in 38.63s）；`python -m pip check`、`npm --prefix web run test`（2 passed）、`npm --prefix web run build`、`git diff --check` 见下方 CI/验收更新。
 真实设备/网络：NOT_RUN — 受控并发测试使用本机受控 HTTP 服务与真实本机 uvicorn 会话，不是手机、平板或真实 Wi-Fi 的性能实验。
 已知限制：仅固定并发窗口，不实现动态窗口/自适应速率/优先级（超出 T008 范围）；观测最大活跃数仅在控制器进程内可靠测量；并发上限 8 与服务端槽位/磁盘限制共同约束；HTTP 无 TLS；Windows ACL 与断电一致性未实测。
-当前分支、工作区状态、PR：feat/T008-controlled-concurrency；本地提交与 GitHub Actions 结果见本记录后续更新。
+当前分支、工作区状态、PR：feat/T008-controlled-concurrency；PR #8（https://github.com/cppppercy/lan-distribution-lab/pull/8）未合并，HEAD 为 003fb46579807fc85b45b868415a824b9cd2f322（以远端为准）。
+本地提交 SHA：2a123d07ffdaa1ba4186cc0efa33afbfda6c0dcd（feat：controlled 与迁移）、003fb46579807fc85b45b868415a824b9cd2f322（docs：README/ARCHITECTURE/TASKS/STATUS/DECISIONS/EXPERIMENTS）。
+GitHub Actions：PASS — 上述提交推送后的两次工作流均在 Windows / Python 3.12 成功执行 npm ci、前端测试/构建与 pytest：push [run 42772364639](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42772364639/job/129682892998)（1 分 39 秒）、PR [run 42772380585](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42772380585/job/129682941726)（1 分 36 秒）。本记录自身的文档提交会再次触发工作流，最终状态以 PR #8 Checks 为准，不自动合并。
 ```
 
 ## T006 审核补修记录（2026-11-10）
