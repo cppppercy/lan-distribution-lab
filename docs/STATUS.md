@@ -42,7 +42,9 @@
 完整回归：`python -m compileall -q src tests` 通过；`python -m pytest`（Python 3.13.7：139 passed, 1 skipped, 1 warning in 41.12s）；`python -m pip check`、`npm --prefix web run test`（2 passed）、`npm --prefix web run build`、`git diff --check` 见下方 CI/验收更新。
 真实设备/网络：NOT_RUN — 本机 loopback UDP 测试成功不代表真实 Wi-Fi/手机热点广播发现；Windows 防火墙、校园 Wi-Fi 客户端隔离、多网卡选择、休眠/断网与跨 VLAN 均未实测。
 已知限制：UDP 广播只在当前广播域有效；二维码未实现（手动输入 URL 即可）；UDP 发现不提供身份认证，发现后仍需一次性配对码；HTTP 无 TLS；未实现 P2P/公网发现。
-当前分支、工作区状态、PR：feat/T009-udp-discovery；本地提交与 GitHub Actions 结果见本记录后续更新。
+当前分支、工作区状态、PR：feat/T009-udp-discovery；PR #9（https://github.com/cppppercy/lan-distribution-lab/pull/9）未合并，HEAD 为 f837a75ba3f8b91c336dbe0ce04a7dd347470357（以远端为准）。
+本地提交 SHA：b47353d34af14b73bbb417e209605894667907b8（feat：UDP 发现与 CLI/脚本）、f837a75ba3f8b91c336dbe0ce04a7dd347470357（docs：README/ARCHITECTURE/THREAT_MODEL/TASKS/STATUS/DECISIONS/TEST_PLAN/EXPERIMENTS）。
+GitHub Actions：PASS — 上述提交推送后的两次工作流均在 Windows / Python 3.12 成功执行 npm ci、前端测试/构建与 pytest：push [run 42776179530](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42776179530/job/129695085847)（1 分 41 秒）、PR [run 42776198753](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42776198753/job/129695144094)（1 分 47 秒）。本记录自身的文档提交会再次触发工作流，最终状态以 PR #9 Checks 为准，不自动合并。
 ```
 
 ## T008 验证记录（2026-11-10）
