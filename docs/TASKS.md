@@ -119,6 +119,8 @@
 
 **验收证据（本地）**：`tests/test_distribution.py` 16 项通过，覆盖：真实 uvicorn 服务器上 3 个独立会话顺序下载并校验 SHA-256、`transfer_records` 的 session_id 互不相同、parallel 由服务端并发计数证明确实重叠、超时/认证失败/中断互不影响、服务端槽位上限返回 `service_unavailable`、顺序 `--stop-on-error` 取消剩余、Range/If-Range 续传与最终 SHA-256、JSON/SQLite 记录不含 token 或私人绝对路径、重复运行/空文件/同名文件/已有文件不覆盖、CLI 端到端与参数校验。完整套件/CI 结果见 `docs/STATUS.md`。
 
+**审核补修（2026-11-10，待 PR#7 复审）**：(1) 分发记录路径安全——在下载启动前用规范化路径（解析 `..`、符号链接别名、Windows 大小写折叠）校验 `--results`、`--records` 与每个客户端目标、`.part`、`.part.json`；结果 JSON 与 SQLite 记录不得同路径，任一记录路径与客户端工件冲突则提前失败，不启动下载、不写结果、不改变已有文件；`write_result_json()` 额外接受受保护路径并在原子替换前拒绝覆盖；SQLite 记录只追加、不覆盖已有运行。(2) 独立凭据——同一次分发中的多个客户端必须使用不同 Bearer Token，重复凭据在启动下载前拒绝且错误信息不含 token 原文；`--pair` 继续为每个逻辑客户端使用独立的一次性配对码。新增 10 项回归测试（含预置文件的非法结果路径、Windows 大小写/别名冲突、重复凭据与 CLI 提前失败、结果 JSON 原子替换与 SQLite 追加）。详见 `docs/STATUS.md` 与 ADR-012。
+
 **非目标**：T008 动态调度、优先级、速率控制与受控并发策略；UDP 发现、P2P、上传续传、浏览器后台续传、真实设备多端分发实验与正式性能图表。
 
 ### T003 及后续任务共同模板

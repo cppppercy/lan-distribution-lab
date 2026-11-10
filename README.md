@@ -141,7 +141,7 @@ python -m lan_distribution_lab distribute `
   --pair
 ```
 
-每个客户端写入 `--output-dir/client-<n>/<--output-name>`（默认 `download.bin`），互不覆盖；若目标文件已存在且内容不同，该客户端失败而不会覆盖用户文件。结果写入 `--output-dir/distribution-result.json`（含 `run_id`、策略、文件 SHA-256、每个客户端的起止时间、字节数、复用字节、耗时与安全错误类型，以及成功/失败/取消汇总），并追加独立 SQLite 记录 `--output-dir/distribution-runs.db`。`--stop-on-error` 只适用于 `sequential`，会把未开始的客户端标记为 `cancelled`。客户端数上限为 8；`parallel` 的真实重叠已由本机服务器同时在途请求测试证明，但这不等于真实多设备分发。
+每个客户端写入 `--output-dir/client-<n>/<--output-name>`（默认 `download.bin`），互不覆盖；若目标文件已存在且内容不同，该客户端失败而不会覆盖用户文件。**同一次分发中的多个客户端必须使用不同的 Bearer token**，重复凭据会在下载开始前被拒绝且错误信息不回显 token；`--pair` 为每个逻辑客户端使用独立的一次性配对码。`--results` 与 `--records` 会在下载启动前做规范化路径校验（解析 `..`、符号链接别名与 Windows 大小写差异）：两者不得使用同一路径，也不得与任何客户端目标、`.part` 或 `.part.json` 冲突；冲突时立即失败，不启动下载、不写结果、不改变已有文件。结果写入 `--output-dir/distribution-result.json`（原子替换，包含 `run_id`、策略、文件 SHA-256、每个客户端的起止时间、字节数、复用字节、耗时与安全错误类型，以及成功/失败/取消汇总），并追加独立 SQLite 记录 `--output-dir/distribution-runs.db`（只追加、不覆盖已有运行）。`--stop-on-error` 只适用于 `sequential`，会把未开始的客户端标记为 `cancelled`。客户端数上限为 8；`parallel` 的真实重叠已由本机服务器同时在途请求测试证明，但这不等于真实多设备分发。
 
 ### 构建并使用 Web 页面（T004）
 
