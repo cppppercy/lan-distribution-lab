@@ -10,6 +10,11 @@ param(
 
     [switch]$NoPairing,
 
+    [switch]$EnableDiscovery,
+
+    [ValidateRange(1, 65535)]
+    [int]$DiscoveryPort = 47800,
+
     [switch]$PrintOnly
 )
 
@@ -112,6 +117,13 @@ $url = "http://${selectedAddress}:$Port/"
 Write-Host "Selected LAN address: $selectedAddress"
 Write-Host "Open on a device connected to the same Wi-Fi/hotspot: $url"
 Write-Host "This script does not change Windows Firewall, NAT, or router settings."
+if ($EnableDiscovery) {
+    Write-Host "UDP discovery: enabled on port $DiscoveryPort. Inbound UDP may need a manual firewall rule."
+    Write-Host "Find this service from another Windows CLI: python -m lan_distribution_lab discover --port $DiscoveryPort"
+}
+else {
+    Write-Host "UDP discovery is disabled. Pass -EnableDiscovery to opt in."
+}
 
 if ($PrintOnly) {
     return
@@ -146,4 +158,14 @@ if (-not $NoPairing) {
 }
 
 Write-Host "Starting LAN service. Keep this window open; press Ctrl+C to stop it."
-& $python -m lan_distribution_lab serve --host $selectedAddress --port $Port --data-dir $dataDir --managed-root $managedRoot
+$serveArguments = @(
+    "-m", "lan_distribution_lab", "serve",
+    "--host", $selectedAddress,
+    "--port", "$Port",
+    "--data-dir", $dataDir,
+    "--managed-root", $managedRoot
+)
+if ($EnableDiscovery) {
+    $serveArguments += @("--discover", "--discover-port", "$DiscoveryPort")
+}
+& $python @serveArguments
