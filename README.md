@@ -171,6 +171,24 @@ python -m lan_distribution_lab experiment `
 
 输出目录必须是从未存在的新目录，结构固定为 `experiments.json`、`trials.csv`、`clients.csv` 和 `trials/trial-<序号>/distribution-result.json`（成功 trial 的原始 `DistributionRun`）。`trials.csv` 的 `application_payload_bytes` 是成功客户端数 × 文件大小，`application_payload_throughput_Bps` 是该值除以批次 `duration_seconds`，只表示应用层有效载荷/批次墙钟时间，**不是**链路带宽。`experiments.json` 含环境标签、Git/Python/平台、试验索引和按策略的描述性统计；成功率使用全部 trial，时间/吞吐量统计只使用完全成功的 trial。**只有全部计划 trial 均成功时整体 `state` 才为 `completed`，且 CLI 返回 0。**continue 模式会继续后续轮次，但任一失败会使整体为 `completed_with_failures` 并返回非零；stop 模式会把未开始轮次标为取消，整体为 `completed_with_cancelled_trials` 并返回非零。两种非完整成功情形都会先打印输出目录并保留已生成 JSON/CSV；Ctrl+C 则记录 `interrupted` 并返回 130。真实 Wi-Fi/设备验证步骤与数据字典见 [实验记录](docs/EXPERIMENTS.md)。
 
+### 实验数据分析与图表（T011）
+
+`analyze` 只读校验一个或多个 T010 结果目录，再在**全新**输出目录写入 `analysis.json`、`report.md` 和静态 SVG 图表；不会改写输入 CSV/JSON，也不读取或上传 PCAP。格式、trial/client 计数、原始 DistributionRun、有限数值和状态必须一致；不完整或不兼容的数据会明确失败，不生成看似可信的图。
+
+```powershell
+python -m lan_distribution_lab analyze `
+  --input .\experiments\exp-20261110-local-001 `
+  --output-dir .\analysis\report-001
+
+# 多个结果目录仅在相同文件版本、客户端数、环境、超时/重试等可比条件内分别汇总
+python -m lan_distribution_lab analyze `
+  --input .\experiments\run-a --input .\experiments\run-b `
+  --metrics duration,throughput,success,controlled,client-timing `
+  --output-dir .\analysis\comparison-001
+```
+
+报告按策略展示完整成功率（分母含失败/取消）、成功 trial 的批次时间和应用层有效吞吐量（MiB/s，1024 进制）、controlled 的上限/观测活跃数、客户端排队/执行时间，以及在数据足够时的 Jain 公平性。吞吐量不是 TCP/NIC 带宽，逻辑客户端也不是独立无线设备；报告不生成因果或显著性结论。未提供抓包摘要时会明确写为“没有抓包证据”。可选 `--packet-summary` 只接受脱敏 schema-v1 JSON 白名单字段；Windows/Wireshark 操作、过滤器和隐私处理见 [抓包证据指南](docs/PACKET_CAPTURE_GUIDE.md)。
+
 ### UDP 局域网发现（T009，可选）
 
 服务**默认不启用** UDP 发现，`127.0.0.1` 默认模式不会向局域网广播。显式启用后，服务在 UDP 端口（默认 `47800`）响应发现请求；发现只返回连接候选，**不授予任何权限**，仍需六位一次性配对码完成认证。

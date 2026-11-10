@@ -1,6 +1,6 @@
-# 当前架构（T010 实验驱动）
+# 当前架构（T011 实验分析）
 
-**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range、T006 Python CLI 安全续传、T007/T008 分发控制、T009 UDP 发现与 T010 控制器侧可重复实验驱动均已实现并经本机自动化测试/构建验证。T004 已获得手机热点基础收发的用户确认；T009 真实广播、平板、真实 LAN 断线恢复、真实多设备分发与 G4 性能实验仍未验证。P2P 未实现。
+**状态**：T003 后端、T004 Vue Web、T005 单 Range/If-Range、T006 Python CLI 安全续传、T007/T008 分发控制、T009 UDP 发现、T010 实验驱动与 T011 只读分析/静态 SVG 报告均已实现并经本机自动化测试/构建验证。T004 已获得手机热点基础收发的用户确认；T009 真实广播、平板、真实 LAN 断线恢复、真实多设备分发与 G4 性能实验仍未验证。P2P 未实现。
 
 ## 组件与数据流
 
@@ -15,6 +15,8 @@ flowchart LR
     distributor --> records["分发 JSON + 独立 SQLite 运行记录"]
     experiment["CLI experiment：固定顺序的 trial 控制器"] --> distributor
     experiment --> experiment_records["CSV/manifest + 每轮原始 JSON"]
+    experiment_records --> analysis["CLI analyze：校验、描述统计、SVG/Markdown"]
+    packet_summary["可选脱敏抓包摘要（操作者离线导出）"] --> analysis
     discover_cli["CLI discover：UDP 探测"] --> udp["UDP discovery responder（opt-in）"]
     udp --> api
     api --> auth["认证、scope、Origin"]
@@ -46,6 +48,7 @@ flowchart LR
 | `distribution.py` | 控制器侧多客户端编排：顺序、普通并发与固定上限受控并发；独立凭据与输出、FIFO 排队、等待/执行计时、JSON 结果与安全错误分类 |
 | `distribution_store.py` | 控制器侧独立 SQLite 分发运行记录（runs/clients），支持 T007 库原地迁移到三种策略且保留历史 |
 | `experiment.py` | T010 实验控制器：验证有界配置、固定轮次/文件/策略顺序、每 trial 全新目录、及时原子导出 manifest/CSV、失败/中断状态和描述性统计；不保存凭据 |
+| `analysis.py` | T011 只读 T010 数据校验、可比条件分组、描述统计/Jain 指数、静态 SVG 和 Markdown 报告；不读取 PCAP、不监听网络、不修改输入 |
 | `discovery.py` | 可选的 UDP 局域网发现协议：有界 JSON 请求/响应、来源 IP 校验、request_id 回显、去重/排序/超时与限速 |
 | `web/` | Vue 3 + TypeScript + Vite 源码；构建后的 web/dist 由同一 FastAPI 进程提供 |
 

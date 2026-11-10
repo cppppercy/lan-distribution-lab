@@ -11,6 +11,7 @@ from pathlib import Path
 
 import uvicorn
 
+from .analysis import ANALYSIS_SCHEMA_VERSION, CHART_METRICS, AnalysisError, analyze_experiments
 from .app import create_app
 from .client import DownloadError, ResumableDownloader, exchange_cli_pairing_code
 from .config import Settings
@@ -233,6 +234,26 @@ def build_parser() -> argparse.ArgumentParser:
     experiment_credentials = experiment.add_mutually_exclusive_group(required=True)
     experiment_credentials.add_argument("--pair", action="store_true", help="prompt once per logical client")
     experiment_credentials.add_argument("--tokens-stdin", action="store_true", help="read one token per client from protected stdin")
+
+    analyze = commands.add_parser(
+        "analyze", help="validate T010 exports and generate descriptive SVG charts and a Markdown report"
+    )
+    analyze.add_argument(
+        "--input", action="append", type=Path, required=True, dest="inputs",
+        help="T010 experiment result directory; repeat for separate experiments",
+    )
+    analyze.add_argument(
+        "--output-dir", type=Path, required=True,
+        help="new analysis output directory (never overwrites an existing directory)",
+    )
+    analyze.add_argument(
+        "--metrics", default=",".join(CHART_METRICS),
+        help="comma-separated charts: duration,throughput,success,controlled,client-timing",
+    )
+    analyze.add_argument(
+        "--packet-summary", type=Path,
+        help=("optional local sanitized schema-v1 JSON summary; no PCAP is read, uploaded or captured"),
+    )
     return parser
 
 
@@ -319,6 +340,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if arguments.command == "experiment":
         _run_experiment_command(arguments)
+        return
+
+    if arguments.command == "analyze":
+        _run_analyze_command(arguments)
         return
 
     if arguments.command == "discover":
@@ -525,6 +550,22 @@ def _run_experiment_command(arguments: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
+
+
+def _run_analyze_command(arguments: argparse.Namespace) -> None:
+    try:
+        metrics = tuple(item.strip() for item in arguments.metrics.split(",") if item.strip())
+        output_dir = analyze_experiments(
+            arguments.inputs,
+            arguments.output_dir,
+            metrics=metrics,
+            packet_summary=arguments.packet_summary,
+        )
+    except AnalysisError as error:
+        print(f"Analysis failed: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+    print(f"Analysis schema v{ANALYSIS_SCHEMA_VERSION} written to: {output_dir}")
+    print("Outputs: analysis.json, report.md and charts/*.svg")
 
 
 def _record_path(value: Path | None, default: Path) -> Path:
