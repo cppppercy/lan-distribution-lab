@@ -88,3 +88,14 @@
 - **理由**：客户端主动拉取符合当前 HTTP 服务不能主动向浏览器推送任意文件的现实；独立会话与独立输出目录能真实暴露认证、槽位与失败隔离问题；复用 T006 协议避免第二套下载实现和对 Range/If-Range 契约的分叉。
 - **替代方案**：拒绝服务端推送/长连接分发（改变现有协议且收益不足）、拒绝共用单一 Token 的线程池冒充多会话、拒绝 P2P/UDP 发现（T009）、拒绝动态调度/优先级/速率控制（T008）、拒绝把本机模拟并发声明为真实多设备实测。
 - **限制**：控制器运行在一台电脑上，逻辑客户端是独立会话的本机进程而非独立设备；并发上限 8 与服务器槽位/磁盘限制共同约束实际并发；未实现 T008 调度、重试策略调优、真实设备性能和真实无线实验；HTTP 无 TLS。
+
+## ADR-013（ACCEPTED，2026-11-10）：固定并发上限的 controlled 调度与 SQLite 原地迁移
+- **背景**：T007 只提供 sequential 与 parallel；T008 需要可复现的固定并发实验入口，并保持独立会话、独立输出、失败隔离和已有记录结构。T007 的 SQLite `distribution_runs.strategy` CHECK 只允许两种策略，直接写入 controlled 会失败；删除数据库会丢失历史记录。
+- **决定**：
+  1. `controlled` 使用标准库 `ThreadPoolExecutor(max_workers=N)`，按确定性 FIFO 提交顺序投递客户端任务；同时活跃任务数不超过 N，完成一个任务后自动接纳下一个等待任务，队列长度受客户端总数（≤ `MAX_CLIENTS` = 8）约束，不创建无界线程或无限队列。N 必须为 1..参与客户端数且 ≤ `MAX_CONCURRENT`；缺失、非法或用于其他策略时在下载开始前报错。
+  2. 控制器记录 `queued_at`、`wait_seconds`、客户端执行 `duration_seconds`、run 级 `duration_seconds`、配置上限 `max_concurrent` 与实际观测最大活跃数 `observed_max_active`；计时使用 `time.monotonic()`，时间戳 UTC。观测值仅代表控制器进程内的可靠测量。
+  3. JSON `schema_version` 升为 2，新增 `scheduling` 与客户端等待字段；v1 字段语义不变（纯加法扩展），旧 JSON 仍可读取。
+  4. SQLite 原地迁移且可重复执行：检测到 T007 的 strategy CHECK 缺少 controlled 时，重建 `distribution_runs`（复制全部历史行）后恢复外键；以 `ALTER TABLE ADD COLUMN` 增加 `max_concurrent`/`observed_max_active`/`queued_at`/`wait_seconds`；更新已有记录不删除历史。
+- **理由**：固定上限 + FIFO 是最小、可复现、易测试的受控并发模型；`ThreadPoolExecutor` 本身有界且属标准库；原地迁移保留历史数据比删除数据库更安全。
+- **替代方案**：拒绝无界线程/自建无限队列、拒绝动态窗口/自适应速率/优先级（超出 T008 固定并发范围）、拒绝删除或重建数据库以规避 CHECK 约束、拒绝改变服务端 API 或复用单一 Token 冒充多会话。
+- **限制**：仅固定并发窗口；不测量真实网络性能；本机模拟并发不能替代真实多设备实验；HTTP 无 TLS。

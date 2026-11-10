@@ -1,4 +1,4 @@
-"""Controller-side coordination of sequential and parallel client downloads.
+"""Controller-side coordination of sequential, parallel and controlled downloads.
 
 The module deliberately stays on top of :class:`ResumableDownloader`: it adds
 multi-client orchestration, per-client in-memory credentials and a machine
@@ -6,15 +6,19 @@ readable run record, but every byte still travels through the T006 protections
 (strong ETag validation, Range/If-Range resume, final SHA-256 verification and
 no-overwrite publication).
 
-Only the controller process is coordinated here.  Each logical client performs
-its own HTTP download with its own credential; the module never pretends that
-threads inside one process are independent remote devices.
+``sequential`` runs one client at a time, ``parallel`` starts every client at
+once and ``controlled`` keeps a fixed number of client tasks active with FIFO
+submission order.  Only the controller process is coordinated here.  Each
+logical client performs its own HTTP download with its own credential; the
+module never pretends that threads inside one process are independent remote
+devices.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -37,13 +41,14 @@ from .client import (
 
 
 MAX_CLIENTS = 8
-STRATEGIES = ("sequential", "parallel")
+MAX_CONCURRENT = MAX_CLIENTS
+STRATEGIES = ("sequential", "parallel", "controlled")
 
 STATUS_SUCCEEDED = "succeeded"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
-RESULT_SCHEMA_VERSION = 1
+RESULT_SCHEMA_VERSION = 2
 
 # Ordered on purpose: subclasses of DownloadError must come before DownloadError.
 _ERROR_TYPES: tuple[tuple[type[BaseException], str], ...] = (
@@ -104,14 +109,18 @@ class ClientResult:
     error_type: str | None
     error_message: str | None
     output_name: str
+    queued_at: datetime | None = None
+    wait_seconds: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
         return {
             "client_id": self.client_id,
             "task_id": self.task_id,
             "status": self.status,
+            "queued_at": _isoformat(self.queued_at) if self.queued_at else None,
             "started_at": _isoformat(self.started_at) if self.started_at else None,
             "finished_at": _isoformat(self.finished_at) if self.finished_at else None,
+            "wait_seconds": self.wait_seconds,
             "duration_seconds": self.duration_seconds,
             "downloaded_bytes": self.downloaded_bytes,
             "resumed_bytes": self.resumed_bytes,
@@ -133,6 +142,8 @@ class DistributionRun:
     finished_at: datetime
     duration_seconds: float
     clients: list[ClientResult] = field(default_factory=list)
+    max_concurrent: int | None = None
+    observed_max_active: int = 0
 
     def counts(self) -> dict[str, int]:
         counts = {STATUS_SUCCEEDED: 0, STATUS_FAILED: 0, STATUS_CANCELLED: 0}
@@ -144,6 +155,10 @@ class DistributionRun:
         counts = self.counts()
         return {
             "schema_version": RESULT_SCHEMA_VERSION,
+            "schema_notes": (
+                "v2 adds scheduling.max_concurrent, scheduling.observed_max_active, "
+                "client queued_at and client wait_seconds; all v1 fields keep their meaning"
+            ),
             "run_id": self.run_id,
             "strategy": self.strategy,
             "file": {
@@ -155,6 +170,10 @@ class DistributionRun:
             "started_at": _isoformat(self.started_at),
             "finished_at": _isoformat(self.finished_at),
             "duration_seconds": self.duration_seconds,
+            "scheduling": {
+                "max_concurrent": self.max_concurrent,
+                "observed_max_active": self.observed_max_active,
+            },
             "clients": [client.to_dict() for client in self.clients],
             "summary": {
                 "total_clients": len(self.clients),
@@ -164,7 +183,11 @@ class DistributionRun:
                 "duration_seconds": self.duration_seconds,
             },
             "units": {"bytes": "bytes", "time": "seconds"},
-            "timing": "process-local durations use time.monotonic(); timestamps are UTC wall clock",
+            "timing": (
+                "process-local durations use time.monotonic(); client duration_seconds is "
+                "execution time, wait_seconds is queue wait and run duration_seconds is batch "
+                "wall time; timestamps are UTC wall clock"
+            ),
         }
 
 
@@ -173,6 +196,24 @@ def _classify_error(error: BaseException) -> str:
         if isinstance(error, exception_type):
             return label
     return "internal"
+
+
+class _ActiveCounter:
+    """Track concurrently executing client tasks and the observed maximum."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def enter(self) -> None:
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+
+    def leave(self) -> None:
+        with self._lock:
+            self.active -= 1
 
 
 def _make_downloader(
@@ -329,10 +370,18 @@ def _execute_client(
     opener: object | None,
     sleep: Callable[[float], None] | None,
     progress: ProgressReporter | None,
+    queued_monotonic: float | None = None,
+    queued_at: datetime | None = None,
+    active_counter: _ActiveCounter | None = None,
 ) -> ClientResult:
     task_id = str(uuid.uuid4())
+    entry_monotonic = time.monotonic()
     started_at = utc_now()
-    started_monotonic = time.monotonic()
+    wait_seconds = (
+        round(max(0.0, entry_monotonic - queued_monotonic), 6)
+        if queued_monotonic is not None
+        else 0.0
+    )
     progress_state = {"downloaded": 0}
 
     def report(downloaded: int, total: int) -> None:
@@ -345,30 +394,36 @@ def _execute_client(
     resumed_bytes = 0
     error_type: str | None = None
     error_message: str | None = None
+    if active_counter is not None:
+        active_counter.enter()
     try:
-        downloader = _make_downloader(
-            server,
-            task.token,
-            timeout_seconds=timeout_seconds,
-            retries=retries,
-            opener=opener,
-            sleep=sleep,
-            progress=report,
-        )
-        result = downloader.download(file_id, task.output_path)
-        status = STATUS_SUCCEEDED
-        downloaded_bytes = result.size_bytes
-        resumed_bytes = result.resumed_bytes
-    except DownloadError as error:
-        status = STATUS_FAILED
-        error_type = _classify_error(error)
-        error_message = str(error)
-        downloaded_bytes = progress_state["downloaded"]
-    except Exception:  # pragma: no cover - defensive: never leak arbitrary details
-        status = STATUS_FAILED
-        error_type = "internal"
-        error_message = "Unexpected internal client failure."
-        downloaded_bytes = progress_state["downloaded"]
+        try:
+            downloader = _make_downloader(
+                server,
+                task.token,
+                timeout_seconds=timeout_seconds,
+                retries=retries,
+                opener=opener,
+                sleep=sleep,
+                progress=report,
+            )
+            result = downloader.download(file_id, task.output_path)
+            status = STATUS_SUCCEEDED
+            downloaded_bytes = result.size_bytes
+            resumed_bytes = result.resumed_bytes
+        except DownloadError as error:
+            status = STATUS_FAILED
+            error_type = _classify_error(error)
+            error_message = str(error)
+            downloaded_bytes = progress_state["downloaded"]
+        except Exception:  # pragma: no cover - defensive: never leak arbitrary details
+            status = STATUS_FAILED
+            error_type = "internal"
+            error_message = "Unexpected internal client failure."
+            downloaded_bytes = progress_state["downloaded"]
+    finally:
+        if active_counter is not None:
+            active_counter.leave()
     finished_at = utc_now()
     return ClientResult(
         client_id=task.client_id,
@@ -376,12 +431,14 @@ def _execute_client(
         status=status,
         started_at=started_at,
         finished_at=finished_at,
-        duration_seconds=_elapsed_seconds(started_monotonic),
+        duration_seconds=_elapsed_seconds(entry_monotonic),
         downloaded_bytes=downloaded_bytes,
         resumed_bytes=resumed_bytes,
         error_type=error_type,
         error_message=error_message,
         output_name=task.output_path.name,
+        queued_at=queued_at if queued_at is not None else started_at,
+        wait_seconds=wait_seconds,
     )
 
 
@@ -407,6 +464,7 @@ def run_distribution(
     strategy: str,
     clients: Sequence[ClientTask],
     *,
+    max_concurrent: int | None = None,
     timeout_seconds: float = 15.0,
     retries: int = 2,
     stop_on_error: bool = False,
@@ -417,25 +475,40 @@ def run_distribution(
     """Download ``file_id`` to every client with the requested strategy.
 
     ``sequential`` starts the next client only after the previous one finished.
-    ``parallel`` starts every client immediately through a bounded thread pool;
-    the actual overlap is created by concurrent blocking HTTP downloads, not by
-    the pool itself.  ``stop_on_error`` only applies to ``sequential`` and marks
-    the not-yet-started clients as ``cancelled``.
+    ``parallel`` submits every client immediately through a bounded thread pool.
+    ``controlled`` submits clients in FIFO order to a pool of ``max_concurrent``
+    workers, so at most that many client tasks run at any moment and a finished
+    task automatically admits the next waiting one.  In every case the overlap
+    is created by concurrent blocking HTTP downloads, not by the pool itself.
+    ``stop_on_error`` only applies to ``sequential`` and marks the not-yet-started
+    clients as ``cancelled``.
     """
     if strategy not in STRATEGIES:
-        raise DistributionError("Strategy must be sequential or parallel.")
+        raise DistributionError("Strategy must be sequential, parallel or controlled.")
     if timeout_seconds <= 0:
         raise DistributionError("Timeout must be greater than zero.")
     if retries < 0:
         raise DistributionError("Retries cannot be negative.")
-    if strategy == "parallel" and stop_on_error:
+    if strategy != "sequential" and stop_on_error:
         raise DistributionError("stop_on_error is only meaningful for sequential distribution.")
     tasks = _validate_tasks(clients)
+    if strategy == "controlled":
+        if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int):
+            raise DistributionError("controlled distribution requires a positive max_concurrent.")
+        if max_concurrent < 1:
+            raise DistributionError("max_concurrent must be a positive integer.")
+        if max_concurrent > MAX_CONCURRENT:
+            raise DistributionError(f"max_concurrent cannot exceed {MAX_CONCURRENT}.")
+        if max_concurrent > len(tasks):
+            raise DistributionError("max_concurrent cannot exceed the number of clients.")
+    elif max_concurrent is not None:
+        raise DistributionError("max_concurrent is only valid for the controlled strategy.")
     _prepare_client_outputs(tasks)
 
     run_id = str(uuid.uuid4())
     started_at = utc_now()
     started_monotonic = time.monotonic()
+    active_counter = _ActiveCounter()
 
     # One authenticated metadata read provides the run-level file identity.
     # Try the client credentials in order so a single invalid first credential
@@ -464,6 +537,8 @@ def run_distribution(
     if strategy == "sequential":
         results: list[ClientResult] = []
         for index, task in enumerate(tasks):
+            queued_at = utc_now()
+            queued_monotonic = time.monotonic()
             result = _execute_client(
                 server,
                 metadata.file_id,
@@ -473,6 +548,9 @@ def run_distribution(
                 opener=opener,
                 sleep=sleep,
                 progress=progress,
+                queued_monotonic=queued_monotonic,
+                queued_at=queued_at,
+                active_counter=active_counter,
             )
             results.append(result)
             if stop_on_error and result.status != STATUS_SUCCEEDED:
@@ -485,21 +563,28 @@ def run_distribution(
                 )
                 break
     else:
-        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-            futures = [
-                pool.submit(
-                    _execute_client,
-                    server,
-                    metadata.file_id,
-                    task,
-                    timeout_seconds=timeout_seconds,
-                    retries=retries,
-                    opener=opener,
-                    sleep=sleep,
-                    progress=progress,
+        worker_limit = len(tasks) if strategy == "parallel" else int(max_concurrent)  # type: ignore[arg-type]
+        with ThreadPoolExecutor(max_workers=worker_limit) as pool:
+            futures = []
+            for task in tasks:
+                queued_at = utc_now()
+                queued_monotonic = time.monotonic()
+                futures.append(
+                    pool.submit(
+                        _execute_client,
+                        server,
+                        metadata.file_id,
+                        task,
+                        timeout_seconds=timeout_seconds,
+                        retries=retries,
+                        opener=opener,
+                        sleep=sleep,
+                        progress=progress,
+                        queued_monotonic=queued_monotonic,
+                        queued_at=queued_at,
+                        active_counter=active_counter,
+                    )
                 )
-                for task in tasks
-            ]
             results = [future.result() for future in futures]
 
     finished_at = utc_now()
@@ -514,6 +599,8 @@ def run_distribution(
         finished_at=finished_at,
         duration_seconds=_elapsed_seconds(started_monotonic),
         clients=results,
+        max_concurrent=max_concurrent,
+        observed_max_active=active_counter.max_active,
     )
 
 

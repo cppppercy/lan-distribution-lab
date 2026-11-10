@@ -1,6 +1,6 @@
 # 实验记录
 
-**状态**：T001 不执行性能、真实 Wi-Fi、手机或平板实验；这些项目当前均为 **NOT_RUN**。本文件是后续任务记录可复现实验与原始数据的模板，不得将模板视为实验结果。
+**状态**：T001 不执行性能、真实 Wi-Fi、手机或平板实验；这些项目当前均为 **NOT_RUN**。T008 提供本机受控并发的可复现执行入口与原始数据格式，但尚未执行策略对照实验，也不产生性能结论。本文件是后续任务记录可复现实验与原始数据的模板，不得将模板视为实验结果。
 
 ## 已登记但未执行的实验
 
@@ -9,6 +9,27 @@
 | EXP-T001-LOCAL-HEALTH | 验证本机健康接口能被本机 HTTP 客户端调用 | PASS：2026-11-08，本机 `127.0.0.1:8000` 返回 `status=ok` | 无性能原始数据；命令见 `docs/STATUS.md` |
 | EXP-G1-MOBILE-TRANSFER | 手机/平板与 Windows 主机的真实文件收发 | NOT_RUN（T003/T004 后） | 尚无 |
 | EXP-G4-DISTRIBUTION | 不同分发策略、文件大小与断线恢复的对照 | NOT_RUN（T010 后） | 尚无 |
+
+## T008 受控并发实验入口（本机）
+
+以下命令用于在**本机**对相同文件、相同客户端数量依次执行三种策略，并把每次运行保存到独立目录，供 T010 分析前验证入口与原始数据格式。它们不代表真实 Wi-Fi/手机/平板实验，也不产生“哪种策略更快/更稳”的结论。
+
+```powershell
+# 同一服务端、同一 file_id、同一客户端数量（每个 --tokens-stdin 提供 N 行独立 token）
+python -m lan_distribution_lab distribute --server http://127.0.0.1:8000 `
+  --file-id <file_id> --strategy sequential --clients 5 `
+  --output-dir .\exp\sequential --tokens-stdin
+
+python -m lan_distribution_lab distribute --server http://127.0.0.1:8000 `
+  --file-id <file_id> --strategy parallel --clients 5 `
+  --output-dir .\exp\parallel --tokens-stdin
+
+python -m lan_distribution_lab distribute --server http://127.0.0.1:8000 `
+  --file-id <file_id> --strategy controlled --clients 5 --max-concurrent 2 `
+  --output-dir .\exp\controlled --tokens-stdin
+```
+
+每次运行在各自目录产生：`distribution-result.json`（`schema_version: 2`；策略、`scheduling.max_concurrent`/`observed_max_active`、各客户端 `queued_at`/`wait_seconds`/`duration_seconds`/字节/状态、成功失败取消汇总）和 `distribution-runs.db`（`distribution_runs`/`distribution_clients`）。T010 应记录执行环境、文件大小、客户端数量、并发上限、重复轮次，并保留原始 JSON/SQLite；未执行或失败的轮次同样记录，不得据此提前宣称性能结论。
 
 ## 后续单次实验记录模板
 

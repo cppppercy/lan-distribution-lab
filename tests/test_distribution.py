@@ -39,6 +39,7 @@ from lan_distribution_lab.client import exchange_cli_pairing_code
 from lan_distribution_lab.config import Settings
 from lan_distribution_lab.distribution import (
     MAX_CLIENTS,
+    MAX_CONCURRENT,
     DistributionError,
     build_client_tasks,
     client_artifact_paths,
@@ -70,6 +71,7 @@ class _OriginState:
         delay_for_token: dict[str, float] | None = None,
         interrupt_once_for_token: set[str] | None = None,
         hold_first_seconds: float = 0.0,
+        content_hold_seconds: float = 0.0,
     ) -> None:
         self.content = content
         self.sha256 = hashlib.sha256(content).hexdigest()
@@ -81,6 +83,7 @@ class _OriginState:
         self.delay_for_token = dict(delay_for_token or {})
         self.interrupt_once_for_token = set(interrupt_once_for_token or ())
         self.hold_first_seconds = hold_first_seconds
+        self.content_hold_seconds = content_hold_seconds
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
@@ -167,6 +170,8 @@ class _OriginHandler(http.server.BaseHTTPRequestHandler):
                     pass
             if state.hold_first_seconds and call_index == 1:
                 time.sleep(state.hold_first_seconds)
+            if state.content_hold_seconds:
+                time.sleep(state.content_hold_seconds)
             delay = state.delay_for_token.get(token, 0.0)
             if delay:
                 time.sleep(delay)
@@ -230,6 +235,7 @@ class FakeOrigin:
         delay_for_token: dict[str, float] | None = None,
         interrupt_once_for_token: set[str] | None = None,
         hold_first_seconds: float = 0.0,
+        content_hold_seconds: float = 0.0,
     ) -> None:
         self.state = _OriginState(
             content,
@@ -239,6 +245,7 @@ class FakeOrigin:
             delay_for_token=delay_for_token,
             interrupt_once_for_token=interrupt_once_for_token,
             hold_first_seconds=hold_first_seconds,
+            content_hold_seconds=content_hold_seconds,
         )
         self._httpd = _QuietThreadingHTTPServer(("127.0.0.1", 0), _OriginHandler)
         self._httpd.state = self.state  # type: ignore[attr-defined]
@@ -580,7 +587,8 @@ def test_result_json_and_sqlite_records_exclude_secrets(tmp_path: Path) -> None:
         origin.close()
 
     payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
+    assert payload["scheduling"] == {"max_concurrent": None, "observed_max_active": 1}
     assert payload["strategy"] == "sequential"
     assert payload["file"]["size_bytes"] == len(content)
     assert payload["file"]["content_sha256"] == hashlib.sha256(content).hexdigest()
@@ -1038,3 +1046,468 @@ def test_records_database_keeps_previous_runs(tmp_path: Path) -> None:
         assert {row[0] for row in rows} == {first.run_id, second.run_id}
     finally:
         origin.close()
+
+
+# ---------------------------------------------------------------------------
+# T008: controlled fixed-concurrency scheduling
+# ---------------------------------------------------------------------------
+
+_T007_DATABASE_SCRIPT = """
+CREATE TABLE distribution_runs (
+    run_id TEXT PRIMARY KEY,
+    strategy TEXT NOT NULL CHECK (strategy IN ('sequential', 'parallel')),
+    file_id TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+    content_sha256 TEXT NOT NULL,
+    etag TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    duration_seconds REAL NOT NULL CHECK (duration_seconds >= 0),
+    succeeded INTEGER NOT NULL,
+    failed INTEGER NOT NULL,
+    cancelled INTEGER NOT NULL
+);
+CREATE TABLE distribution_clients (
+    task_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES distribution_runs(run_id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed', 'cancelled')),
+    started_at TEXT,
+    finished_at TEXT,
+    duration_seconds REAL NOT NULL CHECK (duration_seconds >= 0),
+    downloaded_bytes INTEGER NOT NULL CHECK (downloaded_bytes >= 0),
+    resumed_bytes INTEGER NOT NULL CHECK (resumed_bytes >= 0),
+    error_type TEXT,
+    output_name TEXT NOT NULL
+);
+CREATE INDEX distribution_clients_run_idx ON distribution_clients(run_id);
+"""
+
+
+def _t007_database(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executescript(_T007_DATABASE_SCRIPT)
+        connection.execute(
+            """
+            INSERT INTO distribution_runs VALUES (
+                'old-run-id', 'sequential', 'old-file-id', 11, 'old-sha', '"old-etag"',
+                '2026-11-10T00:00:00+00:00', '2026-11-10T00:00:01+00:00', 1.0, 1, 0, 0
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO distribution_clients VALUES (
+                'old-task-id', 'old-run-id', 'client-1', 'succeeded',
+                '2026-11-10T00:00:00+00:00', '2026-11-10T00:00:01+00:00',
+                1.0, 11, 0, NULL, 'old.bin'
+            )
+            """
+        )
+
+
+def test_controlled_never_exceeds_limit_and_reaches_it(tmp_path: Path) -> None:
+    content = b"controlled-limit" * 10_000
+    origin = FakeOrigin(content, content_hold_seconds=0.2)
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tokens = [f"token-{index}" for index in range(5)]
+        tasks = build_client_tasks(output_dir, "payload.bin", tokens)
+        run = run_distribution(
+            origin.origin,
+            FILE_ID,
+            "controlled",
+            tasks,
+            max_concurrent=2,
+            timeout_seconds=15.0,
+            retries=0,
+        )
+
+        assert run.strategy == "controlled"
+        assert run.max_concurrent == 2
+        assert run.observed_max_active == origin.state.max_active == 2
+        assert run.counts()["succeeded"] == 5
+        for task in tasks:
+            assert task.output_path.read_bytes() == content
+    finally:
+        origin.close()
+
+
+def test_controlled_recovers_slots_in_fifo_order(tmp_path: Path) -> None:
+    content = b"controlled-fifo" * 5_000
+    origin = FakeOrigin(content, content_hold_seconds=0.15)
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tokens = ["fifo-1", "fifo-2", "fifo-3"]
+        tasks = build_client_tasks(output_dir, "payload.bin", tokens)
+        run = run_distribution(
+            origin.origin,
+            FILE_ID,
+            "controlled",
+            tasks,
+            max_concurrent=1,
+            timeout_seconds=15.0,
+            retries=0,
+        )
+
+        assert origin.state.max_active == 1
+        assert run.observed_max_active == 1
+        assert origin.state.content_tokens == tokens, "FIFO submission order must be preserved"
+        waits = [client.wait_seconds for client in run.clients]
+        assert waits[1] > waits[0]
+        assert waits[2] > waits[1]
+        starts = [client.started_at for client in run.clients]
+        assert all(starts) and starts == sorted(starts)
+        assert all(client.duration_seconds >= 0 for client in run.clients)
+        assert run.duration_seconds >= max(client.duration_seconds for client in run.clients)
+    finally:
+        origin.close()
+
+
+def test_controlled_reaches_configured_parallelism(tmp_path: Path) -> None:
+    content = b"controlled-barrier" * 4_000
+    barrier = threading.Barrier(2, timeout=5)
+    origin = FakeOrigin(content, barrier=barrier)
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tasks = build_client_tasks(output_dir, "payload.bin", ["a", "b", "c", "d"])
+        run = run_distribution(
+            origin.origin,
+            FILE_ID,
+            "controlled",
+            tasks,
+            max_concurrent=2,
+            timeout_seconds=15.0,
+            retries=0,
+        )
+
+        assert origin.state.max_active == 2
+        assert run.observed_max_active == 2
+        assert run.counts()["succeeded"] == 4
+    finally:
+        origin.close()
+
+
+def test_controlled_limit_equal_to_client_count(tmp_path: Path) -> None:
+    content = b"controlled-all" * 4_000
+    barrier = threading.Barrier(3, timeout=5)
+    origin = FakeOrigin(content, barrier=barrier)
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tasks = build_client_tasks(output_dir, "payload.bin", ["a", "b", "c"])
+        run = run_distribution(
+            origin.origin,
+            FILE_ID,
+            "controlled",
+            tasks,
+            max_concurrent=3,
+            timeout_seconds=15.0,
+            retries=0,
+        )
+
+        assert origin.state.max_active == 3
+        assert run.observed_max_active == 3
+        assert run.counts()["succeeded"] == 3
+    finally:
+        origin.close()
+
+
+def test_controlled_parameter_validation(tmp_path: Path) -> None:
+    output_dir = prepare_output_directory(tmp_path / "downloads")
+    tasks = build_client_tasks(output_dir, "payload.bin", ["t1", "t2", "t3"])
+
+    for invalid in (None, 0, -1, 4, MAX_CONCURRENT + 1):
+        with pytest.raises(DistributionError):
+            run_distribution(
+                "http://127.0.0.1:1",
+                FILE_ID,
+                "controlled",
+                tasks,
+                max_concurrent=invalid,
+                timeout_seconds=1.0,
+                retries=0,
+            )
+    for strategy in ("sequential", "parallel"):
+        with pytest.raises(DistributionError):
+            run_distribution(
+                "http://127.0.0.1:1",
+                FILE_ID,
+                strategy,
+                tasks,
+                max_concurrent=1,
+                timeout_seconds=1.0,
+                retries=0,
+            )
+
+
+def test_cli_controlled_parameter_validation(tmp_path: Path, monkeypatch, capsys) -> None:
+    def arguments(strategy: str, *extra: str):
+        return build_parser().parse_args(
+            [
+                "distribute",
+                "--server",
+                "http://127.0.0.1:1",
+                "--file-id",
+                FILE_ID,
+                "--strategy",
+                strategy,
+                "--clients",
+                "3",
+                "--output-dir",
+                str(tmp_path / "cli"),
+                "--tokens-stdin",
+                *extra,
+            ]
+        )
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    cases = [
+        arguments("controlled"),
+        arguments("controlled", "--max-concurrent", "0"),
+        arguments("controlled", "--max-concurrent", "-1"),
+        arguments("controlled", "--max-concurrent", "4"),
+        arguments("parallel", "--max-concurrent", "2"),
+        arguments("sequential", "--max-concurrent", "2"),
+    ]
+    for case in cases:
+        with pytest.raises(SystemExit):
+            _run_distribute_command(case)
+        assert "Distribution failed:" in capsys.readouterr().err
+
+    too_large = build_parser().parse_args(
+        [
+            "distribute",
+            "--server",
+            "http://127.0.0.1:1",
+            "--file-id",
+            FILE_ID,
+            "--strategy",
+            "controlled",
+            "--clients",
+            str(MAX_CLIENTS),
+            "--output-dir",
+            str(tmp_path / "cli"),
+            "--tokens-stdin",
+            "--max-concurrent",
+            str(MAX_CONCURRENT + 1),
+        ]
+    )
+    with pytest.raises(SystemExit):
+        _run_distribute_command(too_large)
+    assert "max-concurrent" in capsys.readouterr().err
+
+
+def test_cli_controlled_end_to_end(tmp_path: Path, monkeypatch, capsys) -> None:
+    content = b"cli-controlled" * 3_000
+    origin = FakeOrigin(content)
+    try:
+        output_dir = tmp_path / "cli-controlled"
+        argv = [
+            "distribute",
+            "--server",
+            origin.origin,
+            "--file-id",
+            FILE_ID,
+            "--strategy",
+            "controlled",
+            "--clients",
+            "2",
+            "--max-concurrent",
+            "1",
+            "--output-dir",
+            str(output_dir),
+            "--tokens-stdin",
+            "--timeout",
+            "10",
+            "--retries",
+            "0",
+        ]
+        monkeypatch.setattr("sys.stdin", io.StringIO("token-one\ntoken-two\n"))
+        main(argv)
+    finally:
+        origin.close()
+
+    captured = capsys.readouterr()
+    assert "controlled" in captured.out
+    assert "Scheduling: max concurrent 1, observed max active 1." in captured.out
+    payload = json.loads((output_dir / "distribution-result.json").read_text(encoding="utf-8"))
+    assert payload["strategy"] == "controlled"
+    assert payload["scheduling"] == {"max_concurrent": 1, "observed_max_active": 1}
+    with sqlite3.connect(output_dir / "distribution-runs.db") as connection:
+        row = connection.execute(
+            "SELECT strategy, max_concurrent, observed_max_active FROM distribution_runs"
+        ).fetchone()
+    assert row == ("controlled", 1, 1)
+    assert (output_dir / "client-1" / "download.bin").read_bytes() == content
+    assert (output_dir / "client-2" / "download.bin").read_bytes() == content
+
+
+def test_controlled_failure_does_not_block_waiting_tasks(tmp_path: Path) -> None:
+    content = b"controlled-failure" * 4_000
+    origin = FakeOrigin(content, valid_tokens={"ok-a", "ok-c"})
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tasks = build_client_tasks(output_dir, "payload.bin", ["ok-a", "bad-b", "ok-c"])
+        run = run_distribution(
+            origin.origin,
+            FILE_ID,
+            "controlled",
+            tasks,
+            max_concurrent=2,
+            timeout_seconds=10.0,
+            retries=0,
+        )
+
+        assert [client.status for client in run.clients] == [
+            "succeeded",
+            "failed",
+            "succeeded",
+        ]
+        assert run.clients[1].error_type == "authentication"
+        assert run.counts() == {"succeeded": 2, "failed": 1, "cancelled": 0}
+        assert tasks[0].output_path.read_bytes() == content
+        assert tasks[2].output_path.read_bytes() == content
+        assert not tasks[1].output_path.exists()
+    finally:
+        origin.close()
+
+
+def test_controlled_real_sessions_are_independent(tmp_path: Path, real_environment) -> None:
+    environment = real_environment
+    content = b"controlled-real-sessions" * 2_000
+    uploader = _pair(environment, "read_write")
+    file_id = _upload(environment, uploader, content)
+    tokens = [_pair(environment) for _ in range(3)]
+    output_dir = prepare_output_directory(tmp_path / "downloads")
+    tasks = build_client_tasks(output_dir, "payload.bin", tokens)
+
+    run = run_distribution(
+        environment.base,
+        file_id,
+        "controlled",
+        tasks,
+        max_concurrent=2,
+        timeout_seconds=10.0,
+        retries=1,
+    )
+
+    assert run.counts()["succeeded"] == 3
+    for task in tasks:
+        assert task.output_path.read_bytes() == content
+    transfers = _download_transfers(environment)
+    assert len(transfers) == 3
+    assert all(row["state"] == "completed" for row in transfers)
+    assert {row["session_id"] for row in transfers} == {
+        token.split(".", 1)[0] for token in tokens
+    }
+
+
+def test_controlled_json_and_sqlite_timing_record(tmp_path: Path) -> None:
+    content = b"controlled-records" * 3_000
+    origin = FakeOrigin(content, content_hold_seconds=0.1)
+    tokens = ["rec-a", "rec-b", "rec-c"]
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tasks = build_client_tasks(output_dir, "payload.bin", tokens)
+        run = run_distribution(
+            origin.origin,
+            FILE_ID,
+            "controlled",
+            tasks,
+            max_concurrent=2,
+            timeout_seconds=15.0,
+            retries=0,
+        )
+        result_path = write_result_json(tmp_path / "records" / "controlled.json", run)
+        store = DistributionStore(tmp_path / "records" / "controlled-runs.db")
+        store.save(run)
+    finally:
+        origin.close()
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 2
+    assert payload["strategy"] == "controlled"
+    assert payload["scheduling"] == {
+        "max_concurrent": 2,
+        "observed_max_active": run.observed_max_active,
+    }
+    assert 1 <= run.observed_max_active <= 2
+    assert payload["summary"]["succeeded"] == 3
+    for client in payload["clients"]:
+        assert client["queued_at"] and client["started_at"] and client["finished_at"]
+        assert client["wait_seconds"] >= 0
+        assert client["duration_seconds"] >= 0
+        assert client["started_at"] >= client["queued_at"]
+        assert client["finished_at"] >= client["started_at"]
+    assert run.duration_seconds >= max(client.duration_seconds for client in run.clients)
+    assert run.duration_seconds >= max(client.wait_seconds for client in run.clients)
+
+    result_text = result_path.read_text(encoding="utf-8")
+    for token in tokens:
+        assert token not in result_text
+    assert str(tmp_path) not in result_text
+
+    with sqlite3.connect(store.path) as connection:
+        run_row = connection.execute(
+            "SELECT strategy, max_concurrent, observed_max_active FROM distribution_runs"
+        ).fetchone()
+        client_rows = connection.execute(
+            "SELECT wait_seconds, duration_seconds FROM distribution_clients"
+        ).fetchall()
+    assert run_row == ("controlled", 2, run.observed_max_active)
+    assert len(client_rows) == 3
+    assert all(wait >= 0 and duration >= 0 for wait, duration in client_rows)
+    database_bytes = store.path.read_bytes()
+    for token in tokens:
+        assert token.encode("utf-8") not in database_bytes
+
+
+def test_t007_database_migrates_and_keeps_history(tmp_path: Path) -> None:
+    database = tmp_path / "t007-records.db"
+    _t007_database(database)
+
+    store = DistributionStore(database)
+    with sqlite3.connect(store.path) as connection:
+        old_runs = connection.execute(
+            "SELECT run_id, strategy, max_concurrent, observed_max_active FROM distribution_runs"
+        ).fetchall()
+        old_clients = connection.execute(
+            "SELECT task_id, queued_at, wait_seconds FROM distribution_clients"
+        ).fetchall()
+    assert old_runs == [("old-run-id", "sequential", None, 0)]
+    assert old_clients == [("old-task-id", None, 0.0)]
+
+    content = b"migrated-controlled" * 2_000
+    origin = FakeOrigin(content)
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tasks = build_client_tasks(output_dir, "payload.bin", ["migrated-a", "migrated-b"])
+        run = run_distribution(
+            origin.origin,
+            FILE_ID,
+            "controlled",
+            tasks,
+            max_concurrent=2,
+            timeout_seconds=10.0,
+            retries=0,
+        )
+        store.save(run)
+    finally:
+        origin.close()
+
+    reopened = DistributionStore(database)
+    reopened.save(
+        run,
+    )
+    with sqlite3.connect(reopened.path) as connection:
+        runs = connection.execute(
+            "SELECT run_id, strategy FROM distribution_runs ORDER BY strategy"
+        ).fetchall()
+        controlled_clients = connection.execute(
+            "SELECT client_id, wait_seconds FROM distribution_clients WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchall()
+    assert ("old-run-id", "sequential") in runs
+    assert (run.run_id, "controlled") in runs
+    assert len(controlled_clients) == 2
+    assert all(wait >= 0 for _, wait in controlled_clients)

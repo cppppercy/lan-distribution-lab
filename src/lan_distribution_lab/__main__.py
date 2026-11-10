@@ -15,6 +15,8 @@ from .client import DownloadError, ResumableDownloader, exchange_cli_pairing_cod
 from .config import Settings
 from .distribution import (
     MAX_CLIENTS,
+    MAX_CONCURRENT,
+    STRATEGIES,
     DistributionError,
     build_client_tasks,
     client_artifact_paths,
@@ -74,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     distribute.add_argument("--file-id", required=True, help="UUID returned by the file list or metadata API")
     distribute.add_argument(
         "--strategy",
-        choices=("sequential", "parallel"),
+        choices=STRATEGIES,
         required=True,
         help="sequential waits for each client; parallel overlaps the downloads",
     )
@@ -103,6 +105,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     distribute.add_argument("--timeout", type=float, default=15.0, help="per-request timeout in seconds")
     distribute.add_argument("--retries", type=int, default=2, help="finite retry count for network failures")
+    distribute.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=None,
+        help=(
+            "controlled only: maximum number of client tasks running at once "
+            f"(1 to --clients, at most {MAX_CONCURRENT})"
+        ),
+    )
     distribute.add_argument(
         "--stop-on-error",
         action="store_true",
@@ -189,8 +200,19 @@ def _run_distribute_command(arguments: argparse.Namespace) -> None:
             raise DistributionError("--timeout must be greater than zero.")
         if arguments.retries < 0:
             raise DistributionError("--retries cannot be negative.")
-        if arguments.strategy == "parallel" and arguments.stop_on_error:
+        if arguments.strategy != "sequential" and arguments.stop_on_error:
             raise DistributionError("--stop-on-error is only valid with --strategy sequential.")
+        if arguments.strategy == "controlled":
+            if arguments.max_concurrent is None:
+                raise DistributionError("--strategy controlled requires --max-concurrent N.")
+            if not 1 <= arguments.max_concurrent <= arguments.clients:
+                raise DistributionError("--max-concurrent must be between 1 and --clients.")
+            if arguments.max_concurrent > MAX_CONCURRENT:
+                raise DistributionError(
+                    f"--max-concurrent cannot exceed {MAX_CONCURRENT}."
+                )
+        elif arguments.max_concurrent is not None:
+            raise DistributionError("--max-concurrent is only valid with --strategy controlled.")
         output_name = safe_output_name(arguments.output_name)
         output_dir = prepare_output_directory(arguments.output_dir)
         results_path = _record_path(arguments.results, output_dir / "distribution-result.json")
@@ -212,6 +234,7 @@ def _run_distribute_command(arguments: argparse.Namespace) -> None:
             timeout_seconds=arguments.timeout,
             retries=arguments.retries,
             stop_on_error=arguments.stop_on_error,
+            max_concurrent=arguments.max_concurrent,
         )
         protected_paths = [
             artifact for output in client_outputs for artifact in client_artifact_paths(output)
@@ -229,6 +252,11 @@ def _run_distribute_command(arguments: argparse.Namespace) -> None:
         f"{counts['succeeded']} succeeded, {counts['failed']} failed, "
         f"{counts['cancelled']} cancelled in {run.duration_seconds:.3f} s."
     )
+    if run.max_concurrent is not None:
+        print(
+            f"Scheduling: max concurrent {run.max_concurrent}, "
+            f"observed max active {run.observed_max_active}."
+        )
     for client in run.clients:
         if client.status == "succeeded":
             print(
