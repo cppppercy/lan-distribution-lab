@@ -38,7 +38,9 @@
 本地验证：PASS — `python -m compileall -q src tests`；`python -m pytest`（Python 3.13.7：88 passed, 1 skipped, 1 warning in 10.96s，其中 tests/test_resumable_client.py 21 passed）；`python -m pip check`（No broken requirements found）；`npm --prefix web run test`（2 passed）；`npm --prefix web run build`（通过）；`git diff --check`（通过）。新增 12 项测试，其中 8 项使用本地两个不同端口的真实 HTTP 服务：客户端不跟随 301/302/303/307/308，第二端口未收到 Bearer token 或配对码，失败不发布目标文件；其余覆盖完整 .part 免重复下载、空文件完整 .part、完整但损坏 .part 隔离、200/416/版本变化后的 resumed_bytes 归零。
 真实设备/网络：NOT_RUN — 本次仅要求自动化测试，未做真实手机、平板、真实 Wi-Fi/热点或断线人工验收；用户计划在主要功能完成后集中人工验收。
 已知限制：HTTP 无 TLS，同网段窃听仍可取得 token/内容；Windows ACL、断电一致性与真实无线中断未实测；上传续传、多范围、浏览器后台续传仍不实现。
-当前分支、工作区状态、PR：feat/T006-resumable-client；PR #6（https://github.com/cppppercy/lan-distribution-lab/pull/6）未合并；本次补修提交与 GitHub Actions 结果见本记录后续更新。
+当前分支、工作区状态、PR：feat/T006-resumable-client；PR #6（https://github.com/cppppercy/lan-distribution-lab/pull/6）未合并，HEAD 为 0a35412e2f25a613cc1b44e95a57365da35c7fa0。
+本地提交 SHA：d3ee1fb（fix：client 与测试）、0a35412（docs：STATUS/TASKS/DECISIONS）。
+GitHub Actions：PASS — 上述提交推送后的两次工作流均在 Windows / Python 3.12 成功执行 npm ci、前端测试/构建与 pytest：push [run 42735847761](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42735847761/job/129564759996)（1 分 4 秒）、PR [run 42735853416](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42735853416/job/129564778611)（1 分 24 秒）。本记录自身的文档提交会再次触发工作流，最终状态以 PR #6 Checks 为准；不自动合并。
 ```
 
 ## T006 验证记录（2026-11-09）
