@@ -1,6 +1,6 @@
 # 实验记录
 
-**状态**：T001 不执行性能、真实 Wi-Fi、手机或平板实验；这些项目当前均为 **NOT_RUN**。T008 提供本机受控并发的可复现执行入口与原始数据格式，T009 提供本机 loopback UDP 发现自动化；两者都尚未执行真实网络/策略对照实验，也不产生性能结论。本文件是后续任务记录可复现实验与原始数据的模板，不得将模板视为实验结果。
+**状态**：T010 已提供本机控制器可重复执行、原始数据保留和描述性汇总工具；它尚未采集任何真实网络、手机或平板性能数据。T009 提供本机 loopback UDP 发现自动化。它们都不产生真实性或策略优劣结论；本文件的命令和模板不是实验结果。
 
 ## 已登记但未执行的实验
 
@@ -8,12 +8,52 @@
 | --- | --- | --- | --- |
 | EXP-T001-LOCAL-HEALTH | 验证本机健康接口能被本机 HTTP 客户端调用 | PASS：2026-11-08，本机 `127.0.0.1:8000` 返回 `status=ok` | 无性能原始数据；命令见 `docs/STATUS.md` |
 | EXP-G1-MOBILE-TRANSFER | 手机/平板与 Windows 主机的真实文件收发 | NOT_RUN（T003/T004 后） | 尚无 |
-| EXP-G4-DISTRIBUTION | 不同分发策略、文件大小与断线恢复的对照 | NOT_RUN（T010 后） | 尚无 |
+| EXP-G4-DISTRIBUTION | 不同分发策略、文件大小与断线恢复的对照 | NOT_RUN（T010 工具已实现，尚未采集） | 未来由 `experiment` 新目录保留 |
 | EXP-G3-UDP-DISCOVERY | 真实 Wi-Fi/移动热点上的 UDP 广播发现、多网卡选择与防火墙影响 | NOT_RUN（T009 后） | 本机 loopback 自动化通过；真实广播尚无 |
 
 ## T009 UDP 发现实验（待执行，真实网络）
 
 本机 loopback 自动化测试（`tests/test_udp_discovery.py`）只证明协议、校验与 CLI 行为，**不等于**真实广播发现。后续人工实验应记录：设备与 Windows 版本、网络拓扑（家庭 Wi-Fi/移动热点）、网卡数量与所选 `--broadcast`/`--interface`、Windows 防火墙状态（是否手动放行 UDP）、服务端 `--discover-port`、发现耗时与结果数、失败现象（超时/被隔离），以及手机/平板是否能手动打开发现的 URL。实验完成前保持 **NOT_RUN**，并按下方模板记录原始数据。
+
+## T010 分发实验驱动（已实现工具；真实实验待执行）
+
+实验驱动只协调同一 Windows 控制器内的逻辑客户端下载；认证仍需每个逻辑客户端一个独立会话。以下命令会提示输入三个无回显的一次性 `read` 配对码，并以固定顺序执行 3 轮 × 1 文件 × 3 策略。开始前为同一个服务生成三个独立 read 配对码；不要把配对码或 Bearer token 写入本文件、终端历史、CSV 或 Git。
+
+```powershell
+python -m lan_distribution_lab experiment `
+  --server http://127.0.0.1:8000 `
+  --file-id <FILE_UUID> `
+  --strategies sequential,parallel,controlled `
+  --clients 3 --max-concurrent 2 --rounds 3 `
+  --environment-type local_loopback `
+  --output-dir .\experiments\exp-20261110-local-001 `
+  --pair
+```
+
+`--file-id` 可重复使用以加入不同大小对象；试验顺序始终为 `round → file_id → strategy`，便于重跑、不会产生未记录随机性。`--on-error continue`（默认）持久化失败后继续，`--on-error stop` 会将未开始的计划标为 `cancelled`。每次指定的 `--output-dir` 必须从未存在，避免覆盖旧数据或把已完成文件当成新网络下载。
+
+### 原始数据目录与字段
+
+```text
+<output-dir>/
+  experiments.json                       # 清单、环境/软件版本、trial 索引、描述性统计
+  trials.csv                             # 每 trial 一行，失败/取消也保留
+  clients.csv                            # 每 trial × 逻辑客户端一行
+  trials/trial-001/distribution-result.json  # 仅成功调用的原始 DistributionRun
+  trials/trial-001/client-1/download.bin
+  ...
+```
+
+- `experiments.json`：`experiment_id`、格式版本、UTC 开始/更新时间、服务器、文件/策略/客户端/超时/重试配置、`environment_type`、固定顺序、Git commit、Python、平台、每轮索引和状态。它不含凭据、Cookie、配对码或本地绝对路径。
+- `trials.csv`：`size_bytes`、成功/失败/取消计数、`observed_max_active`、`logical_completed_bytes`、`resumed_bytes`、状态和安全错误类别；`application_payload_bytes = succeeded × size_bytes`，`application_payload_throughput_Bps = application_payload_bytes / duration_seconds`。后者是应用层有效载荷按批次墙钟时间的 B/s，不能称作链路带宽。
+- `clients.csv`：匿名 `client_id`、状态、排队/执行秒数、下载/复用字节、错误类别、`integrity_verified`。失败客户端不会静默删除。
+- 成功样本统计仅纳入状态为 `completed`（全部逻辑客户端成功）的 trial；成功率分母仍是全部 trial。均值、中位数、最小/最大只作描述，不推断显著性，也不宣称 controlled 一定更好。
+
+### 真实性与后续人工实验
+
+`local_loopback` 仅表示控制器和服务都位于本机；`controller_to_lan` 表示控制器访问了 LAN 上的服务，但逻辑客户端仍都在控制器内。两种自动化环境都**不是**真实独立物理客户端或无线性能实验。T010 没有请求、也没有执行手机、平板、家庭 Wi-Fi、热点、校园 Wi-Fi、断线或吞吐量实测；它们保持 **NOT_RUN**。
+
+G4 人工实验开始时，应对每一个结果目录按模板补充：服务端与每台客户端的型号/系统/浏览器或 CLI 版本，网络拓扑与 IP 网段（不写 Wi-Fi 密码）、文件 UUID/大小/SHA-256、客户端数、策略/上限、轮数、实际环境标签、时间、断线方式、失败现象和原始目录校验。关键固定变量对照至少三轮，且不得把不同文件大小、客户端数或网络环境混为同一对照组。
 
 ## T008 受控并发实验入口（本机）
 
