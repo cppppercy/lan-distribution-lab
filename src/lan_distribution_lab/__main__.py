@@ -13,6 +13,18 @@ import uvicorn
 from .app import create_app
 from .client import DownloadError, ResumableDownloader, exchange_cli_pairing_code
 from .config import Settings
+from .distribution import (
+    MAX_CLIENTS,
+    DistributionError,
+    build_client_tasks,
+    client_artifact_paths,
+    prepare_output_directory,
+    run_distribution,
+    safe_output_name,
+    validate_distribution_paths,
+    write_result_json,
+)
+from .distribution_store import DistributionStore
 from .runtime import Runtime
 
 
@@ -53,6 +65,59 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--device-label", help="optional 1-64 character label used only while pairing")
     download.add_argument("--timeout", type=float, default=15.0, help="per-request timeout in seconds")
     download.add_argument("--retries", type=int, default=2, help="finite retry count for network failures")
+
+    distribute = commands.add_parser(
+        "distribute",
+        help="download one immutable file through several independent client sessions",
+    )
+    distribute.add_argument("--server", required=True, help="bare http(s) server address, without an API path")
+    distribute.add_argument("--file-id", required=True, help="UUID returned by the file list or metadata API")
+    distribute.add_argument(
+        "--strategy",
+        choices=("sequential", "parallel"),
+        required=True,
+        help="sequential waits for each client; parallel overlaps the downloads",
+    )
+    distribute.add_argument("--clients", type=int, default=2, help=f"number of logical clients (1-{MAX_CLIENTS})")
+    distribute.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="directory that receives one subdirectory per logical client",
+    )
+    distribute.add_argument(
+        "--output-name",
+        default="download.bin",
+        help="file name written inside each client directory (default: download.bin)",
+    )
+    distribute_credentials = distribute.add_mutually_exclusive_group(required=True)
+    distribute_credentials.add_argument(
+        "--pair",
+        action="store_true",
+        help="securely prompt for one one-time pairing code per client (token kept in memory only)",
+    )
+    distribute_credentials.add_argument(
+        "--tokens-stdin",
+        action="store_true",
+        help="read one access token per client from standard input (for an already secure pipe)",
+    )
+    distribute.add_argument("--timeout", type=float, default=15.0, help="per-request timeout in seconds")
+    distribute.add_argument("--retries", type=int, default=2, help="finite retry count for network failures")
+    distribute.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="sequential only: mark the remaining clients cancelled after the first failure",
+    )
+    distribute.add_argument(
+        "--results",
+        type=Path,
+        help="machine readable JSON result path (default: <output-dir>/distribution-result.json)",
+    )
+    distribute.add_argument(
+        "--records",
+        type=Path,
+        help="SQLite distribution record path (default: <output-dir>/distribution-runs.db)",
+    )
     return parser
 
 
@@ -109,7 +174,112 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
 
+    if arguments.command == "distribute":
+        _run_distribute_command(arguments)
+        return
+
     parser.error("unknown command")
+
+
+def _run_distribute_command(arguments: argparse.Namespace) -> None:
+    try:
+        if not 1 <= arguments.clients <= MAX_CLIENTS:
+            raise DistributionError(f"--clients must be between 1 and {MAX_CLIENTS}.")
+        if arguments.timeout <= 0:
+            raise DistributionError("--timeout must be greater than zero.")
+        if arguments.retries < 0:
+            raise DistributionError("--retries cannot be negative.")
+        if arguments.strategy == "parallel" and arguments.stop_on_error:
+            raise DistributionError("--stop-on-error is only valid with --strategy sequential.")
+        output_name = safe_output_name(arguments.output_name)
+        output_dir = prepare_output_directory(arguments.output_dir)
+        results_path = _record_path(arguments.results, output_dir / "distribution-result.json")
+        records_path = _record_path(arguments.records, output_dir / "distribution-runs.db")
+        client_outputs = [
+            output_dir / f"client-{index + 1}" / output_name
+            for index in range(arguments.clients)
+        ]
+        # Validate every record path before credentials are requested or any
+        # download starts, so a conflicting path can never overwrite a file.
+        validate_distribution_paths(results_path, records_path, client_outputs)
+        tokens = _gather_client_tokens(arguments)
+        tasks = build_client_tasks(output_dir, output_name, tokens)
+        run = run_distribution(
+            arguments.server,
+            arguments.file_id,
+            arguments.strategy,
+            tasks,
+            timeout_seconds=arguments.timeout,
+            retries=arguments.retries,
+            stop_on_error=arguments.stop_on_error,
+        )
+        protected_paths = [
+            artifact for output in client_outputs for artifact in client_artifact_paths(output)
+        ]
+        results_path = write_result_json(results_path, run, protected_paths=protected_paths)
+        store = DistributionStore(records_path)
+        store.save(run)
+    except (DistributionError, DownloadError) as error:
+        print(f"Distribution failed: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    counts = run.counts()
+    print(
+        f"Distribution {run.run_id} ({run.strategy}): "
+        f"{counts['succeeded']} succeeded, {counts['failed']} failed, "
+        f"{counts['cancelled']} cancelled in {run.duration_seconds:.3f} s."
+    )
+    for client in run.clients:
+        if client.status == "succeeded":
+            print(
+                f"  [ok] {client.client_id} {client.downloaded_bytes} bytes "
+                f"(resumed {client.resumed_bytes}), {client.duration_seconds:.3f} s"
+            )
+        else:
+            detail = client.error_message or "no detail"
+            if client.error_type:
+                detail = f"{client.error_type}: {detail}"
+            print(f"  [{client.status}] {client.client_id} {detail}")
+    print(f"Result JSON: {results_path}")
+    print(f"Records: {store.path}")
+    if counts["succeeded"] != len(run.clients):
+        raise SystemExit(1)
+
+
+def _record_path(value: Path | None, default: Path) -> Path:
+    candidate = Path(value) if value is not None else default
+    return candidate.expanduser().resolve(strict=False)
+
+
+def _gather_client_tokens(arguments: argparse.Namespace) -> list[str]:
+    count = arguments.clients
+    if arguments.pair:
+        tokens: list[str] = []
+        for index in range(count):
+            client_id = f"client-{index + 1}"
+            pairing_code = getpass.getpass(f"Pairing code for {client_id}: ")
+            tokens.append(
+                exchange_cli_pairing_code(
+                    arguments.server,
+                    pairing_code,
+                    timeout_seconds=arguments.timeout,
+                    device_label=f"distribution-{client_id}",
+                )
+            )
+        return tokens
+    tokens = []
+    for _ in range(count):
+        line = sys.stdin.readline()
+        if not line:
+            break
+        token = line.strip()
+        if token:
+            tokens.append(token)
+    if len(tokens) != count:
+        raise DistributionError(
+            f"Expected {count} access token(s) on standard input; received {len(tokens)}."
+        )
+    return tokens
 
 
 def _add_storage_arguments(parser: argparse.ArgumentParser) -> None:
