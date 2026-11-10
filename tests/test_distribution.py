@@ -15,6 +15,7 @@ import hashlib
 import http.server
 import io
 import json
+import os
 import socket
 import sqlite3
 import threading
@@ -40,9 +41,11 @@ from lan_distribution_lab.distribution import (
     MAX_CLIENTS,
     DistributionError,
     build_client_tasks,
+    client_artifact_paths,
     prepare_output_directory,
     run_distribution,
     safe_output_name,
+    validate_distribution_paths,
     write_result_json,
 )
 from lan_distribution_lab.distribution_store import DistributionStore
@@ -782,3 +785,256 @@ def test_cli_distribute_end_to_end(tmp_path: Path, monkeypatch, capsys) -> None:
     assert records_path.exists()
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["summary"]["succeeded"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Review remediation: record-path collisions and duplicate credentials
+# ---------------------------------------------------------------------------
+
+
+def test_results_or_records_cannot_alias_client_artifacts(tmp_path: Path) -> None:
+    output_dir = prepare_output_directory(tmp_path / "downloads")
+    client_outputs = [
+        output_dir / "client-1" / "download.bin",
+        output_dir / "client-2" / "download.bin",
+    ]
+
+    for artifact in client_artifact_paths(client_outputs[0]):
+        with pytest.raises(DistributionError, match="conflicts"):
+            validate_distribution_paths(artifact, output_dir / "records.db", client_outputs)
+        with pytest.raises(DistributionError, match="conflicts"):
+            validate_distribution_paths(output_dir / "result.json", artifact, client_outputs)
+
+    with pytest.raises(DistributionError, match="different paths"):
+        validate_distribution_paths(
+            output_dir / "same.json", output_dir / "same.json", client_outputs
+        )
+
+    validate_distribution_paths(
+        output_dir / "result.json", output_dir / "records.db", client_outputs
+    )
+
+
+def test_path_alias_and_windows_case_conflicts_are_detected(tmp_path: Path) -> None:
+    output_dir = prepare_output_directory(tmp_path / "downloads")
+    client_output = output_dir / "client-1" / "download.bin"
+
+    alias = output_dir / "client-1" / ".." / "client-1" / "download.bin"
+    with pytest.raises(DistributionError, match="conflicts"):
+        validate_distribution_paths(alias, output_dir / "records.db", [client_output])
+
+    if os.name == "nt":
+        upper = Path(str(client_output).upper())
+        with pytest.raises(DistributionError, match="conflicts"):
+            validate_distribution_paths(output_dir / "result.json", upper, [client_output])
+
+
+def test_result_json_never_overwrites_a_downloaded_file(tmp_path: Path) -> None:
+    content = b"review-remediation-payload" * 2_000
+    origin = FakeOrigin(content)
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tasks = build_client_tasks(output_dir, "payload.bin", ["token-a", "token-b"])
+        run = run_distribution(
+            origin.origin, FILE_ID, "sequential", tasks, timeout_seconds=10.0, retries=0
+        )
+        target = tasks[0].output_path
+        before = target.read_bytes()
+
+        with pytest.raises(DistributionError, match="conflicts"):
+            write_result_json(target, run, protected_paths=[target])
+
+        assert target.read_bytes() == before == content
+    finally:
+        origin.close()
+
+
+def test_cli_rejects_results_path_that_would_overwrite_a_client_file(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    output_dir = tmp_path / "cli-collision"
+    target = output_dir / "client-1" / "download.bin"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"keep-me")
+
+    arguments = build_parser().parse_args(
+        [
+            "distribute",
+            "--server",
+            "http://127.0.0.1:1",
+            "--file-id",
+            FILE_ID,
+            "--strategy",
+            "parallel",
+            "--clients",
+            "2",
+            "--output-dir",
+            str(output_dir),
+            "--tokens-stdin",
+            "--results",
+            str(target),
+        ]
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    with pytest.raises(SystemExit):
+        _run_distribute_command(arguments)
+
+    assert target.read_bytes() == b"keep-me"
+    assert "conflicts" in capsys.readouterr().err
+    assert not (output_dir / "distribution-runs.db").exists()
+
+
+def test_cli_rejects_records_path_that_would_overwrite_resume_artifacts(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    output_dir = tmp_path / "cli-collision"
+    target = output_dir / "client-2" / "download.bin.part.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"keep-resume-state")
+
+    arguments = build_parser().parse_args(
+        [
+            "distribute",
+            "--server",
+            "http://127.0.0.1:1",
+            "--file-id",
+            FILE_ID,
+            "--strategy",
+            "sequential",
+            "--clients",
+            "2",
+            "--output-dir",
+            str(output_dir),
+            "--tokens-stdin",
+            "--records",
+            str(target),
+        ]
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    with pytest.raises(SystemExit):
+        _run_distribute_command(arguments)
+
+    assert target.read_bytes() == b"keep-resume-state"
+    assert "conflicts" in capsys.readouterr().err
+
+
+def test_cli_rejects_same_results_and_records_path(tmp_path: Path, monkeypatch, capsys) -> None:
+    output_dir = tmp_path / "cli-collision"
+    shared = output_dir / "distribution.json"
+    arguments = build_parser().parse_args(
+        [
+            "distribute",
+            "--server",
+            "http://127.0.0.1:1",
+            "--file-id",
+            FILE_ID,
+            "--strategy",
+            "parallel",
+            "--clients",
+            "2",
+            "--output-dir",
+            str(output_dir),
+            "--tokens-stdin",
+            "--results",
+            str(shared),
+            "--records",
+            str(shared),
+        ]
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    with pytest.raises(SystemExit):
+        _run_distribute_command(arguments)
+
+    assert "different paths" in capsys.readouterr().err
+    assert not shared.exists()
+
+
+def test_duplicate_credentials_are_rejected_without_echo(tmp_path: Path) -> None:
+    output_dir = prepare_output_directory(tmp_path / "downloads")
+
+    with pytest.raises(DistributionError, match="distinct") as error:
+        build_client_tasks(
+            output_dir, "payload.bin", ["duplicate-secret-one", "duplicate-secret-one"]
+        )
+
+    assert "duplicate-secret-one" not in str(error.value)
+
+
+def test_cli_rejects_duplicate_tokens_before_download(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    arguments = build_parser().parse_args(
+        [
+            "distribute",
+            "--server",
+            "http://127.0.0.1:1",
+            "--file-id",
+            FILE_ID,
+            "--strategy",
+            "parallel",
+            "--clients",
+            "2",
+            "--output-dir",
+            str(tmp_path / "duplicate"),
+            "--tokens-stdin",
+        ]
+    )
+    monkeypatch.setattr(
+        "sys.stdin", io.StringIO("duplicate-secret-one\nduplicate-secret-one\n")
+    )
+
+    with pytest.raises(SystemExit):
+        _run_distribute_command(arguments)
+
+    captured = capsys.readouterr()
+    assert "distinct" in captured.err
+    assert "duplicate-secret-one" not in captured.err
+
+
+def test_result_json_replaces_its_own_previous_result_atomically(tmp_path: Path) -> None:
+    content = b"atomic-result" * 1_000
+    origin = FakeOrigin(content)
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tasks = build_client_tasks(output_dir, "payload.bin", ["token-a"])
+        first = run_distribution(
+            origin.origin, FILE_ID, "sequential", tasks, timeout_seconds=10.0, retries=0
+        )
+        second = run_distribution(
+            origin.origin, FILE_ID, "sequential", tasks, timeout_seconds=10.0, retries=0
+        )
+        result_path = output_dir / "distribution-result.json"
+        write_result_json(result_path, first)
+        write_result_json(result_path, second)
+
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        assert payload["run_id"] == second.run_id
+        assert not list(output_dir.glob(".*.tmp"))
+    finally:
+        origin.close()
+
+
+def test_records_database_keeps_previous_runs(tmp_path: Path) -> None:
+    content = b"records-append" * 1_000
+    origin = FakeOrigin(content)
+    try:
+        output_dir = prepare_output_directory(tmp_path / "downloads")
+        tasks = build_client_tasks(output_dir, "payload.bin", ["token-a"])
+        first = run_distribution(
+            origin.origin, FILE_ID, "sequential", tasks, timeout_seconds=10.0, retries=0
+        )
+        second = run_distribution(
+            origin.origin, FILE_ID, "sequential", tasks, timeout_seconds=10.0, retries=0
+        )
+        store = DistributionStore(output_dir / "distribution-runs.db")
+        store.save(first)
+        store.save(second)
+
+        with sqlite3.connect(store.path) as connection:
+            rows = connection.execute("SELECT run_id FROM distribution_runs").fetchall()
+        assert {row[0] for row in rows} == {first.run_id, second.run_id}
+    finally:
+        origin.close()

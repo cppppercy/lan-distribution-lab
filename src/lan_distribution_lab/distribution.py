@@ -32,6 +32,7 @@ from .client import (
     ProtocolError,
     ResumableDownloader,
     ServerBusyError,
+    resume_artifact_paths,
 )
 
 
@@ -210,6 +211,9 @@ def _validate_tasks(tasks: Sequence[ClientTask]) -> list[ClientTask]:
     for task in tasks:
         if not isinstance(task.token, str) or not task.token.strip():
             raise DistributionError("Every client needs its own non-empty access token.")
+    tokens = [task.token for task in tasks]
+    if len(set(tokens)) != len(tokens):
+        raise DistributionError("Each client must use a distinct Bearer credential.")
     return list(tasks)
 
 
@@ -262,6 +266,57 @@ def build_client_tasks(output_dir: Path, output_name: str, tokens: Sequence[str]
         for index, token in enumerate(tokens)
     ]
     return _validate_tasks(tasks)
+
+
+def client_artifact_paths(output_path: Path) -> tuple[Path, Path, Path]:
+    """Return the download target and its adjacent ``.part``/``.part.json`` files."""
+    target = Path(output_path)
+    part_path, state_path = resume_artifact_paths(target)
+    return (target, part_path, state_path)
+
+
+def path_identity(path: Path) -> str:
+    """Comparison key that normalizes aliases, symlinks and Windows case differences."""
+    resolved = Path(path).expanduser().resolve(strict=False)
+    return os.path.normcase(os.path.normpath(str(resolved)))
+
+
+def validate_distribution_paths(
+    results_path: Path,
+    records_path: Path,
+    client_outputs: Sequence[Path],
+) -> None:
+    """Reject record paths that could overwrite a client download or each other.
+
+    The comparison resolves ``.``/``..`` and symlink aliases and applies Windows
+    case folding, so ``client-1/download.bin``, ``client-1/../client-1/download.bin``
+    and ``CLIENT-1\\DOWNLOAD.BIN`` are all treated as the same protected file.
+    """
+    results_identity = path_identity(results_path)
+    records_identity = path_identity(records_path)
+    if results_identity == records_identity:
+        raise DistributionError(
+            "The result JSON and the SQLite record database must use different paths."
+        )
+    for label, path in (("result JSON", results_path), ("SQLite record", records_path)):
+        resolved = Path(path).expanduser().resolve(strict=False)
+        if resolved.exists() and resolved.is_dir():
+            raise DistributionError(f"The {label} path must name a file, not a directory.")
+        if resolved.parent.exists() and not resolved.parent.is_dir():
+            raise DistributionError(f"The {label} path has a parent that is not a directory.")
+    protected: dict[str, str] = {}
+    for output in client_outputs:
+        for artifact, description in zip(
+            client_artifact_paths(output),
+            ("download target", "partial download", "resume state"),
+        ):
+            protected[path_identity(artifact)] = description
+    for label, identity in (("result JSON", results_identity), ("SQLite record", records_identity)):
+        description = protected.get(identity)
+        if description is not None:
+            raise DistributionError(
+                f"The {label} path conflicts with a client {description}; refusing to overwrite it."
+            )
 
 
 def _execute_client(
@@ -462,11 +517,27 @@ def run_distribution(
     )
 
 
-def write_result_json(path: Path, run: DistributionRun) -> Path:
-    """Atomically write the machine readable run result."""
+def write_result_json(
+    path: Path,
+    run: DistributionRun,
+    *,
+    protected_paths: Sequence[Path] = (),
+) -> Path:
+    """Atomically write the machine readable run result.
+
+    ``protected_paths`` lists client download targets and resume artifacts; the
+    writer refuses to replace any of them, so a misconfigured ``--results`` can
+    never clobber a file a client just downloaded.  Ordinary result files are
+    still replaced atomically through a temporary file plus ``os.replace``.
+    """
     destination = path.expanduser().resolve(strict=False)
     if destination.exists() and destination.is_dir():
         raise DistributionError("The result path must name a file.")
+    destination_identity = path_identity(destination)
+    if any(path_identity(candidate) == destination_identity for candidate in protected_paths):
+        raise DistributionError(
+            "The result JSON path conflicts with a downloaded file; refusing to overwrite it."
+        )
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         encoded = json.dumps(run.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")

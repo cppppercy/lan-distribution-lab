@@ -53,7 +53,12 @@ class DistributionStore:
     """Append one immutable record per distribution run."""
 
     def __init__(self, path: Path) -> None:
-        self.path = Path(path).expanduser().resolve(strict=False)
+        raw = Path(path).expanduser()
+        if raw.is_symlink():
+            raise DistributionError("The distribution record path must be a regular file.")
+        self.path = raw.resolve(strict=False)
+        if self.path.exists() and self.path.is_dir():
+            raise DistributionError("The distribution record path must be a regular file.")
         self._initialize()
 
     def _initialize(self) -> None:

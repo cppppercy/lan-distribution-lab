@@ -17,9 +17,11 @@ from .distribution import (
     MAX_CLIENTS,
     DistributionError,
     build_client_tasks,
+    client_artifact_paths,
     prepare_output_directory,
     run_distribution,
     safe_output_name,
+    validate_distribution_paths,
     write_result_json,
 )
 from .distribution_store import DistributionStore
@@ -191,6 +193,15 @@ def _run_distribute_command(arguments: argparse.Namespace) -> None:
             raise DistributionError("--stop-on-error is only valid with --strategy sequential.")
         output_name = safe_output_name(arguments.output_name)
         output_dir = prepare_output_directory(arguments.output_dir)
+        results_path = _record_path(arguments.results, output_dir / "distribution-result.json")
+        records_path = _record_path(arguments.records, output_dir / "distribution-runs.db")
+        client_outputs = [
+            output_dir / f"client-{index + 1}" / output_name
+            for index in range(arguments.clients)
+        ]
+        # Validate every record path before credentials are requested or any
+        # download starts, so a conflicting path can never overwrite a file.
+        validate_distribution_paths(results_path, records_path, client_outputs)
         tokens = _gather_client_tokens(arguments)
         tasks = build_client_tasks(output_dir, output_name, tokens)
         run = run_distribution(
@@ -202,10 +213,11 @@ def _run_distribute_command(arguments: argparse.Namespace) -> None:
             retries=arguments.retries,
             stop_on_error=arguments.stop_on_error,
         )
-        results_path = write_result_json(
-            arguments.results or output_dir / "distribution-result.json", run
-        )
-        store = DistributionStore(arguments.records or output_dir / "distribution-runs.db")
+        protected_paths = [
+            artifact for output in client_outputs for artifact in client_artifact_paths(output)
+        ]
+        results_path = write_result_json(results_path, run, protected_paths=protected_paths)
+        store = DistributionStore(records_path)
         store.save(run)
     except (DistributionError, DownloadError) as error:
         print(f"Distribution failed: {error}", file=sys.stderr)
@@ -232,6 +244,11 @@ def _run_distribute_command(arguments: argparse.Namespace) -> None:
     print(f"Records: {store.path}")
     if counts["succeeded"] != len(run.clients):
         raise SystemExit(1)
+
+
+def _record_path(value: Path | None, default: Path) -> Path:
+    candidate = Path(value) if value is not None else default
+    return candidate.expanduser().resolve(strict=False)
 
 
 def _gather_client_tokens(arguments: argparse.Namespace) -> list[str]:
