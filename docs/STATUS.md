@@ -1,19 +1,19 @@
 # 当前项目状态
 
-**更新日期**：2026-11-10
-**整体状态**：T003 和 T005 已合并至 main；T004 已获得手机热点基础收发的用户验证但 G1 人工项目未补齐；T006 Python CLI 安全续传、T007 分发、T008 受控并发、T009 UDP 发现与 T010 实验驱动均已合并。T011 的只读数据分析、静态图表和抓包方法正在实现；真实 G4 网络实验仍为 NOT_RUN。
+**更新日期**：2026-11-13
+**整体状态**：T003--T011 已合并至 main；T004 的电脑、手机、平板 G1 真机补验已于 2026-11-13 完成，覆盖独立配对、多尺寸下载、1 MiB 双向 SHA-256、功能性并发、Wi-Fi 中断实际行为和会话撤销。T012 Markdown 课程实验报告已由 PR #12 合并，目前 PR #13 补入真机证据并润色正文；正式 G4 三策略重复实验、真实 UDP 广播和 PCAP 仍为 NOT_RUN。
 
 ## 事实（已确认）
 - GitHub 仓库：`cppppercy/lan-distribution-lab`，默认 main；最初为空。
 - 用户环境：Windows、32 GB 内存，手机与平板两台移动设备，家庭 Wi-Fi 或手机热点。
-- 用户确认局域网基本连接没有问题；项目专用服务的连通性/性能尚无运行记录。
+- 2026-11-13 已登记电脑、手机和平板的项目服务实际连通与基础文件收发；正式 G4 三策略性能对照仍没有原始数据。
 - 编码协作：Codex 优先、DSH 备用，ChatGPT 制定需求和审核。
 - 已完成文档：README、REQUIREMENTS、AGENTS、TASKS、DECISIONS、STATUS（以仓库实际提交为准）。
 - 项目代码：最小 Python 包、仅本机监听的 Uvicorn 启动入口、`GET /api/health`、本机配对 CLI、`POST /api/pairings`、会话撤销、SQLite 状态与 pytest：**IMPLEMENTED**。
-- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，已合并）**；UDP 局域网发现与 `discover` CLI：**IMPLEMENTED（T009，已合并）**；控制器侧实验计划、CSV/JSON 原始数据与描述统计：**IMPLEMENTED（T010，已合并）**；T010 只读校验、SVG 图表/Markdown 分析与抓包方法：**IMPLEMENTED（T011，待审查）**；P2P：**NOT_IMPLEMENTED**。
+- 文件上传/下载核心、SHA-256、元数据和传输摘要：**IMPLEMENTED（T003-B）**；HTTP Range 与 Python CLI 下载续传：**IMPLEMENTED（T005/T006，已合并）**；多客户端顺序/并发分发控制与本机运行记录：**IMPLEMENTED（T007，已合并）**；受控并发调度 controlled 与 SQLite 迁移：**IMPLEMENTED（T008，已合并）**；UDP 局域网发现与 `discover` CLI：**IMPLEMENTED（T009，已合并）**；控制器侧实验计划、CSV/JSON 原始数据与描述统计：**IMPLEMENTED（T010，已合并）**；T010 只读校验、SVG 图表/Markdown 分析与抓包方法：**IMPLEMENTED（T011，已合并）**；P2P：**NOT_IMPLEMENTED**。
 - T002 设计文档：文件 API 契约、配对/会话威胁模型、存储/版本原则、测试矩阵：**COMPLETED（设计，不是业务实现）**。
 - GitHub Actions 工作流：**IMPLEMENTED 且 PASS**。T001 分支推送与 PR #1 均在 Python 3.12 成功执行 pytest（25 秒、27 秒）。
-- 真实手机/平板测量、断线实验、性能结果：**NOT_RUN**。
+- 真实手机/平板 G1 功能与断线行为：**PASS（2026-11-13，证据边界见下方）**；正式 G4 性能结果与真实 PCAP：**NOT_RUN**。
 
 ## 当前任务
 - **T001 — DONE**：最小工程初始化、健康接口、自动化测试、CI 配置和启动说明已按任务边界完成。完整证据见下方记录与 `docs/TASKS.md`。
@@ -21,15 +21,34 @@
 - **T003-A — DONE**：配对码、会话、撤销、scope 与存储基础实现完成并完成有界请求读取补修。
 - **T003-B — DONE（实现与本地测试）**：受控上传/下载、SHA-256、SQLite 文件/任务摘要与安全测试已完成。
 - **T003 — DONE**：T003-A/B 及最终验收补修已合并至 main。
-- **T004 — IN_PROGRESS**：Vue Web、同源静态托管、Cookie 集成、显式私有 IPv4 LAN 启动及自动选址启动脚本已实现；手机热点基础互传已验证，平板、SHA-256 对照和断线等 G1 人工项目待补验。
+- **T004 — DONE**：Vue Web、同源静态托管、Cookie 集成、显式私有 IPv4 LAN 启动与自动选址脚本已实现；2026-11-13 已补齐电脑、手机、平板配对/收发、1 MiB 双向 SHA-256、功能并发、断网行为和撤销验证。
 - **T005 — DONE**：单 Range、强 ETag If-Range、范围任务语义和自动化边界测试已合并至 main。
 - **T006 — DONE**：Python CLI `.part`/无秘密状态、Range/If-Range 恢复、强响应校验、SHA-256 发布、自动化故障测试与 2026-11-10 审核补修已完成；PR #6 已合并至 main（合并提交 `dbe69d116fb6ecf15b0b7d1c9dae842d3b2c5a55`）。
 - **T007 — DONE**：`python -m lan_distribution_lab distribute` 控制器、sequential/parallel 策略、每客户端独立凭据与独立输出、运行级 JSON 与独立 SQLite 分发记录、审核补修已完成；PR #7 已合并至 main（合并提交 `155462e5324f915645f490b02847fa3a5e46addf`）。
 - **T008 — DONE**：controlled 固定并发策略（`--max-concurrent`）、FIFO 排队、等待/执行/批次计时拆分、JSON schema v2、T007 SQLite 原地迁移与 11 项新测试已完成；PR #8 已合并至 main（合并提交 `fa698871e12f650bea5a1b32da322b217aa662e4`）。
 - **T009 — DONE**：可选 UDP 局域网发现 responder、`discover` CLI、request_id/来源 IP/版本校验、去重排序、限速与 14 项测试已合并至 main（`1d2c131ecc71ed3e8d49428e7a51318993681ee1`）；真实广播仍 NOT_RUN。
 - **T010 — DONE（已合并）**：`experiment` CLI 以有界、确定顺序复用既有分发，保留每轮原始 JSON 与 CSV/manifest，记录失败/取消/中断且不写凭据。整体状态仅在全部计划 trial 成功时为 `completed`；失败或取消会返回非零 CLI 退出码而不删除导出。真实手机/平板/无线 G4 数据仍 NOT_RUN。
-- **T011 — IN_PROGRESS（实现与本地自动化完成，待审查）**：`analyze` 只读校验 T010 manifest/CSV/原始 run，按可比条件输出描述统计、SVG 和 Markdown；可选抓包输入仅是本地脱敏摘要，未读取 PCAP 或执行真实抓包。真实 G4 数据仍 NOT_RUN。
-- 下一关卡：T011 审查和合并后才可进入 T012；T004/G1 与 T010/G4 的剩余真实设备项目仍须如实补验。
+- **T011 — DONE**：`analyze` 只读校验 T010 manifest/CSV/原始 run，按可比条件输出描述统计、SVG 和 Markdown；PR #11 已合并至 main（`00c3fbe376fb9ba305b4e225cbb06571a83f83ad`）。可选抓包输入仅是本地脱敏摘要；真实 PCAP 仍 NOT_RUN。
+- **T012 — IN_PROGRESS（报告修订）**：Markdown 实验报告已由 PR #12 合并；PR #13 正补入 2026-11-13 真机证据并以课程报告风格修订。未创建 ZIP/安装包，功能性并发不等同 G4 策略性能对照。
+- 下一关卡：完成 T012 报告审核；若课程要求给出真实性能图表，仍须另行执行变量受控、至少三轮的 G4 实验。
+
+## 2026-11-13 G1 真机补验记录
+
+```text
+任务：T004/G1 真机补验，为 T012 报告提供真实设备证据
+服务：显式私有 IPv4 http://192.168.31.42:8003；HTTP，无 TLS；未修改防火墙
+设备：Lenovo 83DG / Windows 25H2 build 26200 / Edge 157；iQOO 15T 自带浏览器；联想小新 Pad 2024 自带浏览器。移动设备系统版本未记录，不假定为最新。
+配对与页面：三台设备分别使用独立 read_write 一次性码，均成功进入响应式文件页并看到 0 B、1 MiB、16 MiB、48 MiB 四个合成对象。
+电脑下载：4/4 文件大小和 SHA-256 与源清单匹配。中文名中的空格被 Edge 落盘为下划线，内容未改变。
+双向完整性：手机和平板分别下载 1 MiB 中文名对象并重新上传；两个新对象均为 1048576 字节，SHA-256 均为 7bb3796a2472badd79c03bf02bc3155480b5e05fd2b3301746ed293dbce3f3da；电脑 CLI 回下载后再次匹配；staging 为空。
+移动大文件：手机和平板均由用户确认 48 MiB 保存完成；未在移动端独立计算 SHA-256，因此只作为保存完成的用户证据。
+功能并发：电脑与手机 48 MiB 请求均在 10:48:11 被接受；完整响应分别于 10:48:13、10:48:18 结束，用户确认两端完成。该记录只支持多终端并发可用，不支持策略速度排序。
+Wi-Fi 中断：手机 10:51:55 下载 63 MiB 后断开/恢复 Wi-Fi；浏览器要求人工继续，中间 Range 请求失败，10:52:34--10:52:35 重新完成完整 66060288 字节响应。结论为 Web 最终从头重下，不是可靠断点续传。
+会话撤销：用户退出并刷新后返回配对页；服务端 revoked_at=2026-11-13 10:56:21+08:00，早于原过期时间。
+证据保留：原始截图、SQLite 只读摘要、逐项 CSV 与哈希结果保留于操作者本地 .test-temp 忽略目录，不提交公开仓库。
+已知观察：iQOO 浏览器会把一个逻辑下载拆成多个完整/Range 请求，出现失败、重试及个别长期 started 记录；移动浏览器任务行不能直接当作逻辑下载或性能样本。
+未验证：移动端 48/63 MiB 本地 SHA-256、真实 UDP 广播、真实 PCAP、CLI 真实网络续传、至少三轮的 G4 三策略性能对照。
+```
 
 ## T011 验证记录（2026-11-10）
 
@@ -153,7 +172,7 @@ Codex 本地验证：PASS（T006 专用）— `python -m pytest tests/test_resum
 实际代码变化：新增 Vue 3 + TypeScript + Vite 的响应式单页界面；同源 Cookie 配对、文件列表、XHR 真实上传进度、原生浏览器下载发起、错误/加载/空状态与会话退出。FastAPI 仅在 web/dist 存在时于根路径提供构建后的静态资源，API 路由保持优先。serve 增加显式 --host，仅接受回环或私有 IPv4、拒绝 0.0.0.0/公网地址；默认 Origin 自动与监听 URL 匹配。Windows `scripts/start-lan.ps1` 在用户显式运行后优先选择移动热点 `192.168.137.1`，否则只在地址无歧义时选择私有 IPv4；它构建 Web、创建一次性配对码并调用同一受限 serve 命令，不修改防火墙、NAT 或端口映射。CI 增加 npm ci、前端测试和生产构建。
 Codex 本地验证：PASS — npm audit（0 vulnerabilities）；npm run test（2 passed）；npm run build（Vue 类型检查和 Vite 生产构建通过）；python -m compileall -q src tests；python -m pytest（56 passed, 1 skipped, 1 warning）；短暂运行 127.0.0.1:8044 后 GET / 返回 Vue 根节点且 GET /api/health 返回 ok。新增脚本以 `-PrintOnly` 实测识别当前 Windows 移动热点 `192.168.137.1`；以 8004 完整运行时实测完成构建、配对码创建、该地址监听及 GET /api/health=200，之后仅停止该临时 8004 进程。现有文件 API 测试覆盖配对、上传/下载和 SHA-256 一致性；新增 Python 测试覆盖静态托管不遮蔽 API、LAN host/Origin 及拒绝不安全监听地址。
 GitHub Actions：PASS — PR #4 的功能提交 `9327cbf4a4d1851001a15f9f4c5048e250992787` 在 Windows / Python 3.12 两次触发均通过，分别用时 62 秒和 59 秒；工作流实际执行了 Node 24 的 npm ci、前端测试、Vite 构建及 Python pytest。
-真实设备验证：手机热点场景已验证（用户提供）— 2026-11-09，Windows 移动热点，服务 `192.168.137.1:8003`；手机成功访问 Vue 页面，Windows 电脑与手机分别使用独立 `read_write` 配对码，并确认双向文件收发成功。校园 Wi-Fi 曾超时，原因未确认。平板、文件大小、设备/浏览器信息、SHA-256 对照和断线实验：NOT_RUN。
+真实设备验证：手机热点场景已验证（用户提供）— 2026-11-09，Windows 移动热点，服务 `192.168.137.1:8003`；手机成功访问 Vue 页面，Windows 电脑与手机分别使用独立 `read_write` 配对码，并确认双向文件收发成功。校园 Wi-Fi 曾超时，原因未确认。2026-11-13 已在另一私有 Wi-Fi LAN 会话中补齐电脑、iQOO 15T、联想小新 Pad 2024 的配对/列表/收发、1 MiB 双向 SHA-256、48 MiB 下载、电脑—手机功能并发、63 MiB Wi-Fi 中断和会话撤销；详见顶部 G1 记录。移动端系统版本及大文件本地 SHA-256 未记录，G4 性能和 PCAP 仍 NOT_RUN。
 已知限制：HTTP 无 TLS；浏览器下载只能报告“已发起”，不能证明文件已经在远端保存；会话刷新后服务器无读取 scope 的接口，页面显示“已授权”并让服务器继续强制权限；Range、续传、UDP、P2P 和调度不在本任务范围。
 ```
 

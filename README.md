@@ -1,33 +1,54 @@
 # LAN Distribution Lab
 
-面向局域网的可靠文件传输与多终端协同分发系统（课程项目）。
+**计算机网络课程项目：基于 HTTP/TCP 与 UDP 服务发现的局域网文件传输系统**
 
-> 项目状态：T004 已提供 Vue Web 界面、同源静态托管和显式 LAN 启动方式；T006 提供 Python CLI 的安全下载续传；T007/T008 提供本机多客户端分发及固定并发控制；T009 提供可选 UDP 发现；T010 提供可重复的控制器侧实验驱动与 CSV/JSON 原始数据导出。真实网络实验仍未执行，默认服务仍只监听本机。
+LAN Distribution Lab 是一个可以在局域网中运行的文件收发应用。Windows 电脑作为中心服务器，手机和平板通过浏览器直接访问，完成配对、上传和下载；Python 命令行客户端提供断点续传、多客户端下载调度，以及实验记录与分析功能。
 
-## 项目目标
+项目以普通文件传输为起点，重点解决文件版本和完整性校验、下载中断恢复、多个客户端同时访问及任务状态记录等问题。应用不需要公网服务器，也不是 P2P 文件块交换系统。
 
-在 Windows 主机运行局域网文件服务，让手机、平板通过浏览器访问、上传及下载文件；使用 Python 专用客户端验证断点续传与并发分发，并通过可重复的实验比较分发策略。
+**[阅读完整课程实验报告](docs/EXPERIMENT_REPORT.md)** · [查看项目源码](src/lan_distribution_lab/) · [查看 Web 页面](web/src/)
 
-- 课程主线：HTTP/TCP、客户端—服务器通信、UDP 设备发现、并发传输、错误恢复与网络测量。
-- 主要环境：Windows 32GB；真实客户端为手机、平板；家庭 Wi-Fi 或手机热点；不要求云服务器。
-- 开发协作：用户决策，ChatGPT 负责需求/审核，Codex 主编码，DeepSeek Harness（DSH）可接力。
-- 工作准则：小步实现，测试证据优先，不以界面丰富代替网络技术深度。
+## 项目运行界面
 
-## 规范入口
+![Windows 文件管理页面](docs/images/experiment/desktop-file-list.png)
 
-- [需求规格说明书](docs/REQUIREMENTS.md)
-- [编码 Agent 共同规则](AGENTS.md)
-- [任务清单和交接协议](docs/TASKS.md)
-- [当前状态](docs/STATUS.md)
-- [技术决策记录](docs/DECISIONS.md)
+*Windows 电脑浏览器中的文件列表和操作界面。*
 
-## 重要限制
+还可以查看报告中的[手机、平板与 Wi-Fi 中断截图](docs/EXPERIMENT_REPORT.md#四程序运行与界面展示)。这四张图片均来自实际设备操作。
 
-本项目首先用于可信局域网的实验与课程学习。不得默认开放公网；不得把本机模拟并发测试宣称为多台无线设备实测。原生断点续传首先由 Python 客户端保证，移动浏览器的能力需按实际平台验证。
+## 功能概览
 
-代码、密钥、真实成果以当前仓库与测试记录为准。本文不声称任何尚未执行的测试通过。
+| 模块 | 主要功能 |
+| --- | --- |
+| Web 文件管理 | 响应式页面、文件列表、上传进度、浏览器下载 |
+| 访问授权 | 一次性配对码、只读/读写会话、退出与撤销 |
+| 文件正确性 | 分块读写、受控存储目录、SHA-256、文件版本标识 |
+| 可靠下载 | Python CLI 的 Range、If-Range、ETag、`.part` 恢复及最终校验 |
+| 多客户端分发 | 顺序、普通并发、固定上限受控并发和独立任务记录 |
+| 服务发现 | 可选 UDP 广播发现，支持手动 IP 回退 |
+| 实验分析 | JSON/CSV 原始记录、描述统计、SVG 图表和 Markdown 汇总 |
 
-## 当前可运行基线（T001 + T003 + T004 + T006 + T007 + T008）
+## 实际验证
+
+在 Windows 电脑、手机和平板组成的局域网环境中，已完成独立配对、文件收发、1 MiB 双向文件哈希核验、48 MiB 文件下载、双终端同时请求以及 Wi-Fi 中断行为观察。手机浏览器断网后最终重新下载了完整文件；这不等同于 Python CLI 的安全续传。详情、截图和哈希数据见[实验报告](docs/EXPERIMENT_REPORT.md)。
+
+程序在 Windows GitHub Actions 中通过了 173 项 Python 测试和 2 项前端测试，前端构建成功。[查看测试记录](https://github.com/cppppercy/lan-distribution-lab/actions/runs/42847067827)。
+
+**尚未进行的项目：** 正式三策略真实无线性能对照、真实 UDP 广播及 Wireshark 抓包。现有实验驱动中的多个客户端属于控制器内部的逻辑会话，不能直接等同于多台真实无线设备。
+
+## 技术结构
+
+- **服务端：** Python、FastAPI、Uvicorn、SQLite。
+- **浏览器页面：** Vue 3、TypeScript、Vite。
+- **下载和实验工具：** Python CLI、JSON/CSV、静态 SVG。
+- **网络通信：** HTTP/1.1 over TCP，UDP 仅用于可选发现。
+- **代码位置：** [HTTP 服务及客户端](src/lan_distribution_lab/)、[Web 页面](web/src/)、[自动化测试](tests/)。
+
+更多资料：[实验报告](docs/EXPERIMENT_REPORT.md) · [架构说明](docs/ARCHITECTURE.md) · [实验记录](docs/EXPERIMENTS.md)。任务日志、需求基线和开发决策保留在 `docs/` 中，供需要追踪具体实现的读者查阅。
+
+> 安全说明：默认仅监听 `127.0.0.1`，局域网监听需要显式启动。目前使用 HTTP，未提供 TLS 加密，适合可信局域网实验，不建议直接暴露到公网。
+
+## 安装和运行
 
 ### 前置条件
 
@@ -66,7 +87,7 @@ status service
 ok     lan-distribution-lab
 ```
 
-### 本机生成配对码（T003-A）
+### 本机生成配对码
 
 配对码只能由 Windows 主机上的命令行生成，**没有**对应的 LAN 管理 HTTP 接口。为避免“生成码的状态库”和服务端不一致，`pair create` 与 `serve` 必须使用同一组绝对 `--data-dir` 和 `--managed-root`；两个目录必须分离。
 
@@ -84,11 +105,11 @@ python -m lan_distribution_lab serve --data-dir $dataDir --managed-root $managed
 
 当前 HTTP 未启用 TLS，Cookie 的 `Secure` 属性必须为假才能在 HTTP 工作。这些控制能拒绝未持有凭据的请求、缩短凭据有效期并抵御常见 CSRF；**不能**防止同一局域网的窃听或中间人。不要把配对码或 CLI token 发送给不可信对象，也不要将本机服务暴露到公网。
 
-### 文件 API（T003-B）
+### 文件 API
 
 服务启动后，已配对的 `read_write` 会话可调用 `POST /api/uploads` 上传一个 `multipart/form-data` 文件；已配对的 `read` 会话可调用 `GET /api/files`、`GET /api/files/{file_id}` 及 `GET /api/files/{file_id}/content`。上传使用受控 `staging/`、服务器 UUID 对象名和 SHA-256；下载带强 ETag、安全下载名和 `Accept-Ranges: bytes`，支持单一 `Range` 与强 ETag `If-Range`：可满足范围为 `206`，过期/不匹配版本回退完整 `200`，不可满足范围为 `416`。暂不支持多范围、上传续传或上传幂等键。
 
-### Python CLI 安全断点续传（T006）
+### Python CLI 安全断点续传
 
 先从文件列表或元数据响应取得 `file_id`，再在 Windows PowerShell 中执行。默认会以**不回显**的方式提示输入 CLI Bearer token；token 不会写入命令历史、URL、日志、`.part` 或状态 JSON：
 
@@ -114,7 +135,7 @@ python -m lan_distribution_lab download `
 
 如果服务器回退完整 `200`、返回 `416`、ETag/Content-Range 不匹配、本地状态不一致或 SHA-256 失败，客户端绝不会把新字节追加到旧 `.part`；旧工件会改名为 `.stale-<随机值>` 后从头获取。网络故障默认最多重试 2 次（可用 `--retries` 调整），每个 HTTP 请求默认 15 秒超时（`--timeout`）。`--token-stdin` 仅供调用方已能安全保护标准输入的场景；日常优先使用默认不回显提示或 `--pair`。
 
-### 多客户端协同分发（T007/T008）
+### 多客户端协同分发
 
 `distribute` 用多个**独立会话**把同一文件分别下载到本机多个逻辑客户端目录，复用 T006 的 `ResumableDownloader`，因此每个客户端仍执行强 ETag 校验、Range/If-Range 续传、最终 SHA-256 验证和不覆盖已有目标的发布。它是中心服务器模式下的控制器：逻辑客户端是独立的 Bearer 会话，但不是真实远程设备。支持三种策略：`sequential`（逐个执行）、`parallel`（全部同时启动，受安全上限约束）、`controlled`（固定并发上限，FIFO 排队）。
 
@@ -151,7 +172,7 @@ python -m lan_distribution_lab distribute `
 
 每个客户端写入 `--output-dir/client-<n>/<--output-name>`（默认 `download.bin`），互不覆盖；若目标文件已存在且内容不同，该客户端失败而不会覆盖用户文件。**同一次分发中的多个客户端必须使用不同的 Bearer token**，重复凭据会在下载开始前被拒绝且错误信息不回显 token；`--pair` 为每个逻辑客户端使用独立的一次性配对码。`--max-concurrent N` 仅用于 `controlled`，N 必须为 1..客户端数且不超过安全上限；缺失或误用于其他策略会在下载开始前报错。`--results` 与 `--records` 会在下载启动前做规范化路径校验（解析 `..`、符号链接别名与 Windows 大小写差异）：两者不得使用同一路径，也不得与任何客户端目标、`.part` 或 `.part.json` 冲突；冲突时立即失败，不启动下载、不写结果、不改变已有文件。结果写入 `--output-dir/distribution-result.json`（原子替换；`schema_version: 2`，含 `run_id`、策略、`scheduling.max_concurrent`/`observed_max_active`、文件 SHA-256、每个客户端的排队时间戳/`wait_seconds`/执行时间/字节数/复用字节/安全错误类型，以及成功/失败/取消汇总；v1 字段语义不变），并追加独立 SQLite 记录 `--output-dir/distribution-runs.db`（只追加；打开 T007 旧库时原地迁移并保留历史记录）。`--stop-on-error` 只适用于 `sequential`，会把未开始的客户端标记为 `cancelled`。客户端数上限为 8；`parallel`/`controlled` 的真实重叠由本机服务器同时在途请求测试证明，但这不等于真实多设备分发。排队等待、客户端执行时间与批次总耗时是三个独立指标，测试不据此宣称某种策略更快。
 
-### 可重复分发实验（T010）
+### 可重复分发实验
 
 `experiment` 复用既有下载器和三种分发策略，按固定顺序 `round → file_id → strategy` 逐轮执行；每轮使用新的目录，所以完整下载不会因已有目标文件或 T006 缓存被跳过。它只创建**本机控制器中的逻辑客户端**，即使服务器使用 LAN 地址，也不能据此称为手机、平板或真实 Wi-Fi 实验。
 
@@ -171,7 +192,7 @@ python -m lan_distribution_lab experiment `
 
 输出目录必须是从未存在的新目录，结构固定为 `experiments.json`、`trials.csv`、`clients.csv` 和 `trials/trial-<序号>/distribution-result.json`（成功 trial 的原始 `DistributionRun`）。`trials.csv` 的 `application_payload_bytes` 是成功客户端数 × 文件大小，`application_payload_throughput_Bps` 是该值除以批次 `duration_seconds`，只表示应用层有效载荷/批次墙钟时间，**不是**链路带宽。`experiments.json` 含环境标签、Git/Python/平台、试验索引和按策略的描述性统计；成功率使用全部 trial，时间/吞吐量统计只使用完全成功的 trial。**只有全部计划 trial 均成功时整体 `state` 才为 `completed`，且 CLI 返回 0。**continue 模式会继续后续轮次，但任一失败会使整体为 `completed_with_failures` 并返回非零；stop 模式会把未开始轮次标为取消，整体为 `completed_with_cancelled_trials` 并返回非零。两种非完整成功情形都会先打印输出目录并保留已生成 JSON/CSV；Ctrl+C 则记录 `interrupted` 并返回 130。真实 Wi-Fi/设备验证步骤与数据字典见 [实验记录](docs/EXPERIMENTS.md)。
 
-### 实验数据分析与图表（T011）
+### 实验数据分析与图表
 
 `analyze` 只读校验一个或多个 T010 结果目录，再在**全新**输出目录写入 `analysis.json`、`report.md` 和静态 SVG 图表；不会改写输入 CSV/JSON，也不读取或上传 PCAP。输出目录不得位于任一输入目录内（包括绝对、相对和可解析的符号链接别名），否则会在创建目录前拒绝。计划中的每个 `round × file_id × strategy` 必须恰好出现一次；每份原始 `DistributionRun` 必须唯一且位于对应 `trial-<序号>` 目录。格式、trial/client 计数、原始 DistributionRun、有限数值和状态必须一致；不完整或不兼容的数据会明确失败，不生成看似可信的图。
 
@@ -189,7 +210,7 @@ python -m lan_distribution_lab analyze `
 
 报告按策略展示完整成功率（分母含失败/取消）、成功 trial 的批次时间和应用层有效吞吐量（MiB/s，1024 进制）、controlled 的上限/观测活跃数、客户端排队/执行时间，以及在数据足够时的 Jain 公平性。跨服务器或无法证明相同实验环境的 controlled 上限不会合并为对照；报告只给出稳定的脱敏服务器摘要，不回显地址。吞吐量不是 TCP/NIC 带宽，逻辑客户端也不是独立无线设备；报告不生成因果或显著性结论。未提供抓包摘要时会明确写为“没有抓包证据”。可选 `--packet-summary` 只接受有大小、数量和字段值限制的脱敏 schema-v1 JSON 白名单字段；Windows/Wireshark 操作、过滤器和隐私处理见 [抓包证据指南](docs/PACKET_CAPTURE_GUIDE.md)。
 
-### UDP 局域网发现（T009，可选）
+### UDP 局域网发现（可选）
 
 服务**默认不启用** UDP 发现，`127.0.0.1` 默认模式不会向局域网广播。显式启用后，服务在 UDP 端口（默认 `47800`）响应发现请求；发现只返回连接候选，**不授予任何权限**，仍需六位一次性配对码完成认证。
 
@@ -212,7 +233,7 @@ python -m lan_distribution_lab discover --json
 
 发现结果列出服务名称、IP、HTTP 端口、完整 URL 与协议版本。发现超时会提示手动访问 `http://<LAN-IP>:<HTTP-PORT>/`；手机和平板仍用浏览器打开该 URL 并输入一次性配对码。UDP 广播只在当前广播域有效，校园 Wi-Fi、客户端隔离或跨 VLAN 可能不可用；本项目不实现浏览器 UDP 发现、二维码（当前未实现，手动输入 URL 即可）或云端发现。
 
-### 构建并使用 Web 页面（T004）
+### 构建并使用 Web 页面
 
 先构建一次 Vue 页面；构建产物不提交到 Git，但 `python -m lan_distribution_lab serve` 会从 `web/dist` 同源提供它：
 
