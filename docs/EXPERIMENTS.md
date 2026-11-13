@@ -1,13 +1,13 @@
 # 实验记录
 
-**状态**：T010 已提供本机控制器可重复执行和原始数据保留；T011 已提供只读校验、描述统计、SVG 图表和 Markdown 报告工具。它们尚未采集任何真实网络、手机或平板性能数据。T009 提供本机 loopback UDP 发现自动化。它们都不产生真实性或策略优劣结论；本文件的命令和模板不是实验结果。
+**状态**：电脑、手机、平板的 G1 基础文件收发、1 MiB 往返哈希与功能性并发已在真实局域网中完成；细节见 [课程实验报告](EXPERIMENT_REPORT.md) 和 [项目状态](STATUS.md)。T010 已提供控制器侧的重复实验导出，T011 已提供只读分析和 SVG 图表；正式 G4 三策略无线性能数据、真实 UDP 广播和 Wireshark 抓包仍未采集。
 
-## 已登记但未执行的实验
+## 实验登记与状态
 
 | 实验 ID | 目的 | 状态 | 原始数据位置 |
 | --- | --- | --- | --- |
 | EXP-T001-LOCAL-HEALTH | 验证本机健康接口能被本机 HTTP 客户端调用 | PASS：2026-11-08，本机 `127.0.0.1:8000` 返回 `status=ok` | 无性能原始数据；命令见 `docs/STATUS.md` |
-| EXP-G1-MOBILE-TRANSFER | 手机/平板与 Windows 主机的真实文件收发 | NOT_RUN（T003/T004 后） | 尚无 |
+| EXP-G1-MOBILE-TRANSFER | 电脑、手机、平板的配对、文件收发、1 MiB 往返 SHA-256、功能性并发与 Wi-Fi 中断观察 | PASS（2026-11-13，限已记录项目） | 本地私有验收截图及 CSV/SQLite 摘要；公开展示见 [实验报告](EXPERIMENT_REPORT.md) |
 | EXP-G4-DISTRIBUTION | 不同分发策略、文件大小与断线恢复的对照 | NOT_RUN（T010 工具已实现，尚未采集） | 未来由 `experiment` 新目录保留 |
 | EXP-G3-UDP-DISCOVERY | 真实 Wi-Fi/移动热点上的 UDP 广播发现、多网卡选择与防火墙影响 | NOT_RUN（T009 后） | 本机 loopback 自动化通过；真实广播尚无 |
 
